@@ -3,40 +3,33 @@ import math
 import random
 
 WIDTH, HEIGHT = 700, 500
-NODE_RADIUS = 10
+NODE_RADIUS = 8
 NUM_NODES = 5
-PULSE_SPEED = 1.0
-FRAME_MS = 10
-
+PULSE_SPEED = 2.0
+FRAME_MS = 50
 wall_x2 = random.randint(200, WIDTH - 200)
 wall_y2 = HEIGHT
 wall_height = random.randint(150, 250)
 wall_x1 = wall_x2 + random.randint(-100, 100)
 WALL = ((wall_x1, HEIGHT - wall_height), (wall_x2, wall_y2))
-
 RING_POINTS = 40
 
 def generate_nodes(n, margin=80):
     if False: random.seed(42)
     nodes = []
     attempts = 0
-    
     center_x = WIDTH // 2
     center_y = HEIGHT // 2
     exclude_w = 200
     exclude_h = 150
-    
     while len(nodes) < n and attempts < 10000:
         x = random.randint(margin, WIDTH - margin)
         y = random.randint(margin, HEIGHT - margin)
-        
         in_center = (center_x - exclude_w // 2 <= x <= center_x + exclude_w // 2) and \
                     (center_y - exclude_h // 2 <= y <= center_y + exclude_h // 2)
-                    
         if in_center:
             attempts += 1
             continue
-            
         if all(math.hypot(x - nx, y - ny) > 90 for nx, ny in nodes):
             nodes.append((x, y))
         attempts += 1
@@ -113,8 +106,9 @@ class Ring:
 
     def step(self):
         self.radius += PULSE_SPEED
-        if self.radius > max((r for r in self.ray_stops if r != float("inf")), default=0.0) * 1.5 and \
-                all(r == float("inf") or self.radius >= r for r in self.ray_stops):
+        if all(r != float("inf") and self.radius >= r for r in self.ray_stops):
+            self.done = True
+        elif self.radius > math.hypot(WIDTH, HEIGHT):
             self.done = True
 
     def points(self, ox, oy, n_points):
@@ -201,7 +195,8 @@ class MeshSimApp:
                         stop_dist = self.can_reach[(idx, j)]
                         self.pulses.append(Pulse(idx, j, self.nodes, stop_dist))
         self._draw_frame()
-        self.root.after(FRAME_MS, self._animate)
+        if self.pulses or self.rings:
+            self.root.after(FRAME_MS, self._animate)
 
 def main():
     root = tk.Tk()
