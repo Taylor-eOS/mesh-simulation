@@ -4,18 +4,44 @@ import random
 
 WIDTH, HEIGHT = 700, 500
 NODE_RADIUS = 8
-NUM_NODES = 5
-PULSE_SPEED = 2.0
-FRAME_MS = 50
-wall_x2 = random.randint(200, WIDTH - 200)
-wall_y2 = HEIGHT
-wall_height = random.randint(150, 250)
-wall_x1 = wall_x2 + random.randint(-100, 100)
-WALL = ((wall_x1, HEIGHT - wall_height), (wall_x2, wall_y2))
-RING_POINTS = 40
+NUM_NODES = 6
+PULSE_SPEED = 2.1
+FRAME_MS = 40
+RING_POINTS = 45
+
+def segment_intersection_t(p1, p2, p3, p4):
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    x4, y4 = p4
+    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if denom == 0:
+        return None
+    t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+    u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom
+    if 0 < t < 1 and 0 < u < 1:
+        return t
+    return None
+
+side = random.choice([True, False])
+if side:
+    w1_min_x, w1_max_x = 200, 320
+    w2_min_x, w2_max_x = 380, 500
+else:
+    w1_min_x, w1_max_x = 380, 500
+    w2_min_x, w2_max_x = 200, 320
+
+wall_x2 = random.randint(w1_min_x, w1_max_x)
+wall_height = random.randint(220, 320)
+wall_x1 = wall_x2 + random.randint(-40, 40)
+wall1 = ((wall_x1, HEIGHT - wall_height), (wall_x2, HEIGHT))
+wall2_x1 = random.randint(w2_min_x, w2_max_x)
+wall2_height = random.randint(200, 280)
+wall2_x2 = wall2_x1 + random.randint(-40, 40)
+wall2 = ((wall2_x1, 0), (wall2_x2, wall2_height))
+WALL = [wall1, wall2]
 
 def generate_nodes(n, margin=80):
-    if False: random.seed(42)
     nodes = []
     attempts = 0
     center_x = WIDTH // 2
@@ -35,20 +61,6 @@ def generate_nodes(n, margin=80):
         attempts += 1
     return nodes
 
-def segment_intersection_t(p1, p2, p3, p4):
-    x1, y1 = p1
-    x2, y2 = p2
-    x3, y3 = p3
-    x4, y4 = p4
-    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    if denom == 0:
-        return None
-    t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
-    u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom
-    if 0 < t < 1 and 0 < u < 1:
-        return t
-    return None
-
 def precompute_ring_stops(nodes, wall, n_points):
     far = math.hypot(WIDTH, HEIGHT) * 2
     stops = {}
@@ -58,8 +70,12 @@ def precompute_ring_stops(nodes, wall, n_points):
             angle = 2 * math.pi * k / n_points
             dx, dy = math.cos(angle), math.sin(angle)
             tip = (ox + dx * far, oy + dy * far)
-            t = segment_intersection_t((ox, oy), tip, wall[0], wall[1])
-            ray_stops.append(t * far if t is not None else float("inf"))
+            min_t = float("inf")
+            for w in wall:
+                t = segment_intersection_t((ox, oy), tip, w[0], w[1])
+                if t is not None and t < min_t:
+                    min_t = t
+            ray_stops.append(min_t * far if min_t != float("inf") else float("inf"))
         stops[i] = ray_stops
     return stops
 
@@ -69,12 +85,17 @@ def precompute_can_reach(nodes, wall):
         for j, target in enumerate(nodes):
             if i == j:
                 continue
-            t = segment_intersection_t(origin, target, wall[0], wall[1])
-            if t is None:
+            min_t = None
+            for w in wall:
+                t = segment_intersection_t(origin, target, w[0], w[1])
+                if t is not None:
+                    if min_t is None or t < min_t:
+                        min_t = t
+            if min_t is None:
                 can_reach[(i, j)] = None
             else:
                 path_len = math.hypot(target[0] - origin[0], target[1] - origin[1])
-                can_reach[(i, j)] = t * path_len
+                can_reach[(i, j)] = min_t * path_len
     return can_reach
 
 class Pulse:
@@ -152,10 +173,11 @@ class MeshSimApp:
 
     def _draw_frame(self):
         self.canvas.delete("all")
-        self.canvas.create_line(
-            WALL[0][0], WALL[0][1], WALL[1][0], WALL[1][1],
-            fill="black", width=3
-        )
+        for w in WALL:
+            self.canvas.create_line(
+                w[0][0], w[0][1], w[1][0], w[1][1],
+                fill="black", width=3
+            )
         for ring in self.rings:
             ox, oy = self.nodes[ring.origin_idx]
             pts = ring.points(ox, oy, RING_POINTS)
