@@ -3,7 +3,7 @@ import math
 
 WIDTH, HEIGHT = 700, 500
 NODE_RADIUS = 8
-
+MAX_DISTANCE = 500
 NODES = [
     (100, 80),
     (580, 110),
@@ -12,23 +12,16 @@ NODES = [
     (210, 260),
     (490, 270),
 ]
-
 WALLS = [
     ((320, 0), (300, 210)),
     ((360, 500), (340, 290)),
 ]
 
+def ccw(A, B, C):
+    return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
+
 def segment_intersection(p1, p2, p3, p4):
-    x1, y1 = p1
-    x2, y2 = p2
-    x3, y3 = p3
-    x4, y4 = p4
-    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    if denom == 0:
-        return False
-    t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
-    u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom
-    return 0 < t < 1 and 0 < u < 1
+    return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
 
 def nodes_connected(i, j, nodes, walls):
     for w in walls:
@@ -39,52 +32,102 @@ def nodes_connected(i, j, nodes, walls):
 def node_distance(i, j, nodes):
     x1, y1 = nodes[i]
     x2, y2 = nodes[j]
-    return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+    return math.hypot(x2 - x1, y2 - y1)
 
-def compute_connected_distance_range(nodes, walls):
-    n = len(nodes)
-    distances = [
-        node_distance(i, j, nodes)
-        for i in range(n)
-        for j in range(i + 1, n)
-        if nodes_connected(i, j, nodes, walls)
-    ]
-    if len(distances) < 2:
-        return (distances[0], distances[0]) if distances else (1, 1)
-    return min(distances), max(distances)
+def compute_signal_strength(distance):
+    if distance >= MAX_DISTANCE:
+        return -130
+    return int(-130 + (1 - (distance / MAX_DISTANCE)) * 100)
+
+def find_label_position(x1, y1, x2, y2):
+    mx = (x1 + x2) / 2
+    my = (y1 + y2) / 2
+    dx = x2 - x1
+    dy = y2 - y1
+    length = math.hypot(dx, dy)
+    if length == 0:
+        return x1, y1
+    nx = -dy / length
+    ny = dx / length
+    offset = 15
+    return mx + nx * offset, my + ny * offset
 
 def draw(canvas, nodes, walls):
     canvas.delete("all")
-    min_dist, max_dist = compute_connected_distance_range(nodes, walls)
     for i in range(len(nodes)):
         for j in range(i + 1, len(nodes)):
             x1, y1 = nodes[i]
             x2, y2 = nodes[j]
-            connected = nodes_connected(i, j, nodes, walls)
-            if connected:
+            
+            if nodes_connected(i, j, nodes, walls):
                 dist = node_distance(i, j, nodes)
-                t = (dist - min_dist) / (max_dist - min_dist) if max_dist != min_dist else 0.5
-                width = 2.5 + (1 - t) * 3.5
-                color = "#7ab3d4"
-                canvas.create_line(x1, y1, x2, y2, fill=color, width=width)
+                signal = compute_signal_strength(dist)
+                
+                if signal > -130:
+                    t_val = (signal + 130) / 100
+                    width = 2.5 + t_val * 3.5
+                else:
+                    width = 1
+                
+                canvas.create_line(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    fill="#7ab3d4",
+                    width=width
+                )
+                
+                if signal > -130:
+                    label_x, label_y = find_label_position(x1, y1, x2, y2)
+                    canvas.create_text(
+                        label_x,
+                        label_y,
+                        text=f"{signal}",
+                        fill="#333333",
+                        font=("Arial", 10, "bold")
+                    )
             else:
-                width = 1
-                color = "#cccccc"
-                canvas.create_line(x1, y1, x2, y2, fill=color, width=width, dash=(4, 4))
+                canvas.create_line(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    fill="#cccccc",
+                    width=1,
+                    dash=(4, 4)
+                )
     for w in walls:
-        canvas.create_line(w[0][0], w[0][1], w[1][0], w[1][1], fill="black", width=3)
+        canvas.create_line(
+            w[0][0],
+            w[0][1],
+            w[1][0],
+            w[1][1],
+            fill="black",
+            width=3
+        )
     for x, y in nodes:
         canvas.create_oval(
-            x - NODE_RADIUS, y - NODE_RADIUS,
-            x + NODE_RADIUS, y + NODE_RADIUS,
-            fill="white", outline="black", width=2
+            x - NODE_RADIUS,
+            y - NODE_RADIUS,
+            x + NODE_RADIUS,
+            y + NODE_RADIUS,
+            fill="white",
+            outline="black",
+            width=2
         )
 
 def main():
     root = tk.Tk()
     root.title("Mesh Routing Simulation")
     root.resizable(False, False)
-    canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg="white", highlightthickness=0)
+    canvas = tk.Canvas(
+        root,
+        width=WIDTH,
+        height=HEIGHT,
+        bg="white",
+        highlightthickness=0
+    )
     canvas.pack()
     draw(canvas, NODES, WALLS)
     root.mainloop()
