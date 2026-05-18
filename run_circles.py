@@ -146,19 +146,15 @@ class MeshSimApp:
         self.root = root
         self.root.title("Mesh Routing Simulation")
         self.root.resizable(False, False)
-        
         self.canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg="white", highlightthickness=0)
         self.canvas.pack()
-        
         self.btn_frame = tk.Frame(root)
         self.btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
         self.restart_btn = tk.Button(self.btn_frame, text="Restart", command=self.restart)
         self.restart_btn.pack(pady=5)
-        
         self.nodes = generate_nodes(NUM_NODES)
         self.ring_stops = precompute_ring_stops(self.nodes, WALL, RING_POINTS)
         self.can_reach = precompute_can_reach(self.nodes, WALL)
-        
         self.sender_idx = 0
         self.pulses = []
         self.rings = []
@@ -167,7 +163,6 @@ class MeshSimApp:
         self.is_animating = False
         self.launch_job = None
         self.animate_job = None
-        
         self._draw_frame()
         self.launch_job = self.root.after(500, self._launch_from(self.sender_idx))
 
@@ -178,13 +173,11 @@ class MeshSimApp:
         if self.animate_job:
             self.root.after_cancel(self.animate_job)
             self.animate_job = None
-            
         self.pulses = []
         self.rings = []
         self.reached = set()
         self.fired_from = set()
         self.is_animating = False
-        
         self._draw_frame()
         self.launch_job = self.root.after(500, self._launch_from(self.sender_idx))
 
@@ -228,7 +221,6 @@ class MeshSimApp:
     def _animate(self):
         if not self.is_animating:
             return
-            
         newly_reached = []
         for pulse in self.pulses:
             pulse.step()
