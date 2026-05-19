@@ -4,31 +4,69 @@ WIDTH, HEIGHT = 700, 500
 OUTPUT_FILE = "points.txt"
 GRID = 50
 
-def record_point(event, canvas, points, space_held):
-    x, y = event.x, event.y
-    if space_held[0]:
-        x = round(x / GRID) * GRID
-        y = round(y / GRID) * GRID
-    points.append((x, y))
-    with open(OUTPUT_FILE, "a") as f:
-        f.write(f"({x}, {y}),\n")
+def snap(x, y):
+    return round(x / GRID) * GRID, round(y / GRID) * GRID
+
+def draw_point(canvas, x, y):
     r = 4
     canvas.create_oval(x - r, y - r, x + r, y + r, fill="#e74c3c", outline="#c0392b", width=1)
     canvas.create_text(x + 10, y - 10, text=f"({x}, {y})", fill="#333333", font=("Arial", 9))
 
-def on_undo(event, canvas, points):
-    if not points:
-        return
-    points.pop()
-    with open(OUTPUT_FILE, "w") as f:
-        for px, py in points:
-            f.write(f"({px}, {py}),\n")
+def draw_line(canvas, x1, y1, x2, y2):
+    canvas.create_line(x1, y1, x2, y2, fill="#2980b9", width=2)
+    r = 4
+    canvas.create_oval(x1 - r, y1 - r, x1 + r, y1 + r, fill="#2980b9", outline="#1a5276", width=1)
+    canvas.create_oval(x2 - r, y2 - r, x2 + r, y2 + r, fill="#2980b9", outline="#1a5276", width=1)
+
+def redraw(canvas, points, lines):
     canvas.delete("all")
     draw_grid(canvas)
-    for px, py in points:
+    for x, y in points:
+        draw_point(canvas, x, y)
+    for (x1, y1), (x2, y2) in lines:
+        draw_line(canvas, x1, y1, x2, y2)
+
+def write_file(points, lines):
+    with open(OUTPUT_FILE, "w") as f:
+        for x, y in points:
+            f.write(f"({x}, {y}),\n")
+        for (x1, y1), (x2, y2) in lines:
+            f.write(f"({x1}, {y1}), ({x2}, {y2}),\n")
+
+def record_point(event, canvas, points, lines, space_held):
+    x, y = event.x, event.y
+    if space_held[0]:
+        x, y = snap(x, y)
+    points.append((x, y))
+    write_file(points, lines)
+    draw_point(canvas, x, y)
+
+def record_line(event, canvas, points, lines, line_start, space_held):
+    x, y = event.x, event.y
+    if space_held[0]:
+        x, y = snap(x, y)
+    if line_start[0] is None:
+        line_start[0] = (x, y)
         r = 4
-        canvas.create_oval(px - r, py - r, px + r, py + r, fill="#e74c3c", outline="#c0392b", width=1)
-        canvas.create_text(px + 10, py - 10, text=f"({px}, {py})", fill="#333333", font=("Arial", 9))
+        canvas.create_oval(x - r, y - r, x + r, y + r, fill="#f39c12", outline="#d68910", width=1)
+        canvas.create_text(x + 10, y - 10, text=f"({x}, {y})?", fill="#f39c12", font=("Arial", 9))
+    else:
+        x1, y1 = line_start[0]
+        line_start[0] = None
+        lines.append(((x1, y1), (x, y)))
+        write_file(points, lines)
+        redraw(canvas, points, lines)
+
+def on_undo(event, canvas, points, lines, line_start):
+    line_start[0] = None
+    if lines:
+        lines.pop()
+    elif points:
+        points.pop()
+    else:
+        return
+    write_file(points, lines)
+    redraw(canvas, points, lines)
 
 def draw_grid(canvas):
     for x in range(0, WIDTH, 50):
@@ -42,16 +80,19 @@ def draw_grid(canvas):
 
 def main():
     points = []
+    lines = []
     space_held = [False]
+    line_start = [None]
     open(OUTPUT_FILE, "w").close()
     root = tk.Tk()
-    root.title("Point Recorder — click to record, Ctrl+Z to undo, Space to snap")
+    root.title("Point Recorder — LMB: point, RMB: line (2 clicks), Ctrl+Z: undo, Space: snap")
     root.resizable(False, False)
     canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg="white", highlightthickness=0)
     canvas.pack()
     draw_grid(canvas)
-    canvas.bind("<Button-1>", lambda e: record_point(e, canvas, points, space_held))
-    root.bind("<Control-z>", lambda e: on_undo(e, canvas, points))
+    canvas.bind("<Button-1>", lambda e: record_point(e, canvas, points, lines, space_held))
+    canvas.bind("<Button-3>", lambda e: record_line(e, canvas, points, lines, line_start, space_held))
+    root.bind("<Control-z>", lambda e: on_undo(e, canvas, points, lines, line_start))
     root.bind("<KeyPress-space>", lambda e: space_held.__setitem__(0, True))
     root.bind("<KeyRelease-space>", lambda e: space_held.__setitem__(0, False))
     root.mainloop()
