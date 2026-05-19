@@ -107,18 +107,40 @@ def draw_grid(canvas):
     for y in range(0, HEIGHT, 50):
         canvas.create_text(2, y + 2, text=str(y), fill="#cccccc", font=("Arial", 7), anchor="nw")
 
-def main():
+def load_file():
     points = []
     lines = []
+    try:
+        with open(OUTPUT_FILE, "r") as f:
+            for raw in f:
+                line = raw.strip().rstrip(",")
+                if not line:
+                    continue
+                parts = line.split("), (")
+                if len(parts) == 1:
+                    text = parts[0].strip("()")
+                    x, y = map(int, text.split(","))
+                    points.append((x, y))
+                elif len(parts) == 2:
+                    p1 = parts[0].strip("()")
+                    p2 = parts[1].strip("()")
+                    x1, y1 = map(int, p1.split(","))
+                    x2, y2 = map(int, p2.split(","))
+                    lines.append(((x1, y1), (x2, y2)))
+    except FileNotFoundError:
+        open(OUTPUT_FILE, "w").close()
+    return points, lines
+
+def main():
+    points, lines = load_file()
     space_held = [False]
     line_start = [None]
-    open(OUTPUT_FILE, "w").close()
     root = tk.Tk()
     root.title("Point Recorder — LMB: point/remove, RMB: line (2 clicks)/remove, Ctrl+Z: undo, Space: snap")
     root.resizable(False, False)
     canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg="white", highlightthickness=0)
     canvas.pack()
-    draw_grid(canvas)
+    redraw(canvas, points, lines)
     canvas.bind("<Button-1>", lambda e: record_point(e, canvas, points, lines, space_held))
     canvas.bind("<Button-3>", lambda e: record_line(e, canvas, points, lines, line_start, space_held))
     root.bind("<Control-z>", lambda e: on_undo(e, canvas, points, lines, line_start))
@@ -127,4 +149,5 @@ def main():
     root.bind("<Control-q>", lambda e: root.destroy())
     root.mainloop()
 
-main()
+if __name__ == "__main__":
+    main()
