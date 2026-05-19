@@ -69,15 +69,7 @@ def dijkstra(origin, adj, n, pressure):
             congestion = pressure_weight(pressure[v])
             cost = base * congestion
             nd = dist[u] + cost
-            temperature = 0.15
             if nd < dist[v]:
-                if dist[v] < float("inf"):
-                    delta = dist[v] - nd
-                    accept_prob = sigmoid(
-                        delta / temperature
-                    )
-                    if random.random() > accept_prob:
-                        continue
                 dist[v] = nd
                 pred[v] = u
     paths = {}
@@ -99,42 +91,78 @@ def _dijkstra_worker(args):
     source, adj, n, pressure = args
     return source, dijkstra(source, adj, n, pressure)
 
+def shortest_path(source, dest, adj, pressure):
+    n = len(adj)
+    dist = [float("inf")] * n
+    pred = [-1] * n
+    used = [False] * n
+    dist[source] = 0.0
+    for _ in range(n):
+        u = -1
+        best = float("inf")
+        for i in range(n):
+            if not used[i] and dist[i] < best:
+                best = dist[i]
+                u = i
+        if u == -1:
+            break
+        if u == dest:
+            break
+        used[u] = True
+        for v, sig in adj[u]:
+            base = link_cost(sig)
+            congestion = (
+                1.0 +
+                pressure[v] * PRESSURE_COST
+            )
+            nd = dist[u] + base * congestion
+            if nd < dist[v]:
+                dist[v] = nd
+                pred[v] = u
+    if dist[dest] == float("inf"):
+        return None
+    path = []
+    cur = dest
+    while cur != -1:
+        path.append(cur)
+        cur = pred[cur]
+    path.reverse()
+    return path
+
 def compute_pressure(adj, n):
     pressure = [0.0 for _ in range(n)]
-    workers = os.cpu_count() or 1
-    for _ in range(PRESSURE_ITERATIONS):
+    for iteration in range(PRESSURE_ITERATIONS):
         traffic = [0.0 for _ in range(n)]
-        args = [
-            (source, adj, n, pressure)
-            for source in range(n)
-        ]
-        with ProcessPoolExecutor(max_workers=workers) as ex:
-            for source, paths in ex.map(_dijkstra_worker, args):
-                for dest, path in paths.items():
-                    if len(path) <= 2:
-                        continue
-                    path_pressure = 0.0
-                    for node in path[1:-1]:
-                        path_pressure += pressure[node]
-                    reroute_factor = 1.0 / (
-                        1.0 + path_pressure * 2.5
+        for source in range(n):
+            for dest in range(n):
+                if source == dest:
+                    continue
+                path = shortest_path(
+                    source,
+                    dest,
+                    adj,
+                    pressure
+                )
+                if path is None:
+                    continue
+                if len(path) <= 2:
+                    continue
+                for hop_index, node in enumerate(path[1:-1], start=1):
+                    remaining = len(path) - hop_index
+                    load = (
+                        1.0 +
+                        remaining * 0.25
                     )
-                    for hop_index, node in enumerate(path[1:-1], start=1):
-                        remaining = len(path) - hop_index
-                        load = (
-                            1.0 +
-                            remaining * 0.15
-                        )
-                        traffic[node] += (
-                            load * reroute_factor
-                        )
+                    traffic[node] += load
         peak = max(max(traffic), 1e-9)
+        next_pressure = [0.0 for _ in range(n)]
         for i in range(n):
-            norm = traffic[i] / peak
-            pressure[i] = (
+            normalized = traffic[i] / peak
+            next_pressure[i] = (
                 pressure[i] * PRESSURE_DECAY +
-                norm * PRESSURE_GAIN
+                normalized * PRESSURE_GAIN
             )
+        pressure = next_pressure
     peak = max(max(pressure), 1e-9)
     for i in range(n):
         pressure[i] /= peak
@@ -148,40 +176,104 @@ def relay_probability(node_pressure, path_len):
 
 def build_q_table(adj, n, pressure):
     q = {}
-    workers = os.cpu_count() or 1
-    args = [(source, adj, n, pressure) for source in range(n)]
-    with ProcessPoolExecutor(max_workers=workers) as ex:
-        for source, paths in ex.map(_dijkstra_worker, args):
-            for dest, path in paths.items():
-                relay_nodes = set(path[1:-1])
-                legal_prev = set()
-                for path_index in range(1, len(path)):
-                    current = path[path_index]
-                    previous = path[path_index - 1]
-                    legal_prev.add((current, previous))
-                for node in range(n):
-                    if node == source:
+    all_neighbors = {}
+    for node in range(n):
+        all_neighbors[node] = [
+            neighbor
+            for neighbor, _ in adj[node]
+        ]
+    for source in range(n):
+        paths = dijkstra(
+            source,
+            adj,
+            n,
+            pressure
+        )
+        for dest, primary_path in paths.items():
+            candidate_paths = [primary_path]
+            for _ in range(24):
+                perturbed = [
+                    p + random.uniform(-0.25, 0.25)
+                    for p in pressure
+                ]
+                alt_paths = dijkstra(
+                    source,
+                    adj,
+                    n,
+                    perturbed
+                )
+                if dest not in alt_paths:
+                    continue
+                candidate = alt_paths[dest]
+                if candidate not in candidate_paths:
+                    candidate_paths.append(candidate)
+            path_scores = []
+            for path in candidate_paths:
+                total_cost = 0.0
+                for i in range(len(path) - 1):
+                    u = path[i]
+                    v = path[i + 1]
+                    sig = None
+                    for neighbor, s in adj[u]:
+                        if neighbor == v:
+                            sig = s
+                            break
+                    if sig is None:
                         continue
-                    if node == dest:
+                    signal_cost = (
+                        1.0 /
+                        (((sig + 130.0) / 100.0) ** 2.0)
+                    )
+                    congestion_cost = (
+                        1.0 +
+                        pressure[v] * 8.0
+                    )
+                    total_cost += (
+                        signal_cost *
+                        congestion_cost
+                    )
+                path_scores.append(
+                    1.0 / max(total_cost, 1e-6)
+                )
+            total_score = sum(path_scores)
+            if total_score <= 0:
+                continue
+            positive_states = {}
+            for path, score in zip(
+                candidate_paths,
+                path_scores
+            ):
+                probability = score / total_score
+                for hop_index in range(
+                    1,
+                    len(path) - 1
+                ):
+                    node = path[hop_index]
+                    prev_hop = path[hop_index - 1]
+                    state = (
+                        source,
+                        dest,
+                        prev_hop,
+                        node
+                    )
+                    if state not in positive_states:
+                        positive_states[state] = 0.0
+                    positive_states[state] += probability
+            for state, value in positive_states.items():
+                q[state] = min(1.0, value)
+            for state in list(positive_states.keys()):
+                source, dest, prev_hop, correct_node = state
+                for candidate in all_neighbors[prev_hop]:
+                    if candidate == correct_node:
                         continue
-                    incoming_prev = [
-                        prev for current, prev in legal_prev
-                        if current == node
-                    ]
-                    if not incoming_prev:
-                        incoming_prev = [source]
-                    for prev_hop in incoming_prev:
-                        state = (source, dest, prev_hop, node)
-                        if node in relay_nodes:
-                            target = relay_probability(
-                                pressure[node],
-                                len(path)
-                            )
-                        else:
-                            target = 0.0
-                            if random.random() < 0.8:
-                                continue
-                        q[state] = target
+                    negative_state = (
+                        source,
+                        dest,
+                        prev_hop,
+                        candidate
+                    )
+                    if negative_state not in q:
+                        q[negative_state] = 0.0
     return q
 
 class PolicyModel:
