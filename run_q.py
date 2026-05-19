@@ -1,59 +1,42 @@
+import os
 import math
 import random
+from concurrent.futures import ProcessPoolExecutor
 from utils import ccw, segment_intersection, dot, sigmoid
 
-NODES = [
-    (100, 80),
-    (80, 420),
-    (210, 260),
-    (490, 270),
-    (580, 110),
-    (620, 390),
-    (150, 320),
-    (300, 150),
-    (400, 400),
-    (650, 200),
-    (210, 200),
-]
-WALLS = [
-    ((320, 0), (300, 210)),
-    ((360, 500), (340, 290)),
-    ((560, 270), (700, 270)),
-]
-LATENT_DIM = 3
-LEARN_RATE = 0.01
-EPOCHS = 10000
-EPOCH_INTERVAL = 100
+LATENT_DIM = 128
+MAX_EPOCHS = 10000
+EPOCH_INTERVAL = 10
 PRESSURE_ITERATIONS = 30
 PRESSURE_DECAY = 0.92
 PRESSURE_GAIN = 0.18
 PRESSURE_COST = 4.0
 
-def nodes_connected(i, j):
-    for w in WALLS:
-        if segment_intersection(NODES[i], NODES[j], w[0], w[1]):
+def nodes_connected(i, j, nodes, walls):
+    for w in walls:
+        if segment_intersection(nodes[i], nodes[j], w[0], w[1]):
             return False
     return True
 
-def signal_strength(i, j):
+def signal_strength(i, j, nodes):
     d = math.hypot(
-        NODES[j][0] - NODES[i][0],
-        NODES[j][1] - NODES[i][1]
+        nodes[j][0] - nodes[i][0],
+        nodes[j][1] - nodes[i][1]
     )
     if d >= 500:
         return None
     return -130 + (1 - d / 500) * 100
 
-def build_adjacency():
-    n = len(NODES)
+def build_adjacency(nodes, walls):
+    n = len(nodes)
     adj = {i: [] for i in range(n)}
     for i in range(n):
         for j in range(n):
             if i == j:
                 continue
-            if not nodes_connected(i, j):
+            if not nodes_connected(i, j, nodes, walls):
                 continue
-            s = signal_strength(i, j)
+            s = signal_strength(i, j, nodes)
             if s is not None:
                 adj[i].append((j, s))
     return adj
@@ -85,6 +68,7 @@ def dijkstra(origin, adj, n, pressure):
             congestion = pressure_weight(pressure[v])
             cost = base * congestion
             nd = dist[u] + cost
+
             if nd < dist[v]:
                 dist[v] = nd
                 pred[v] = u
@@ -103,18 +87,24 @@ def dijkstra(origin, adj, n, pressure):
         paths[t] = path
     return paths
 
+def _dijkstra_worker(args):
+    source, adj, n, pressure = args
+    return source, dijkstra(source, adj, n, pressure)
+
 def compute_pressure(adj, n):
     pressure = [0.0 for _ in range(n)]
+    workers = os.cpu_count() or 1
     for _ in range(PRESSURE_ITERATIONS):
         traffic = [0.0 for _ in range(n)]
-        for source in range(n):
-            paths = dijkstra(source, adj, n, pressure)
-            for dest, path in paths.items():
-                if len(path) <= 2:
-                    continue
-                for hop_index, node in enumerate(path[1:-1], start=1):
-                    remaining = len(path) - hop_index
-                    traffic[node] += 1.0 + remaining * 0.15
+        args = [(source, adj, n, pressure) for source in range(n)]
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            for source, paths in ex.map(_dijkstra_worker, args):
+                for dest, path in paths.items():
+                    if len(path) <= 2:
+                        continue
+                    for hop_index, node in enumerate(path[1:-1], start=1):
+                        remaining = len(path) - hop_index
+                        traffic[node] += 1.0 + remaining * 0.15
         peak = max(max(traffic), 1e-9)
         for i in range(n):
             norm = traffic[i] / peak
@@ -135,25 +125,27 @@ def relay_probability(node_pressure, path_len):
 
 def build_q_table(adj, n, pressure):
     q = {}
-    for source in range(n):
-        paths = dijkstra(source, adj, n, pressure)
-        for dest, path in paths.items():
-            relay_nodes = set(path[1:-1])
-            for prev_hop in range(n):
-                for node in range(n):
-                    if node == source:
-                        continue
-                    if node == dest:
-                        continue
-                    state = (source, dest, prev_hop, node)
-                    if node in relay_nodes:
-                        target = relay_probability(
-                            pressure[node],
-                            len(path)
-                        )
-                    else:
-                        target = 0.0
-                    q[state] = target
+    workers = os.cpu_count() or 1
+    args = [(source, adj, n, pressure) for source in range(n)]
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        for source, paths in ex.map(_dijkstra_worker, args):
+            for dest, path in paths.items():
+                relay_nodes = set(path[1:-1])
+                for prev_hop in range(n):
+                    for node in range(n):
+                        if node == source:
+                            continue
+                        if node == dest:
+                            continue
+                        state = (source, dest, prev_hop, node)
+                        if node in relay_nodes:
+                            target = relay_probability(
+                                pressure[node],
+                                len(path)
+                            )
+                        else:
+                            target = 0.0
+                        q[state] = target
     return q
 
 class PolicyModel:
@@ -203,13 +195,59 @@ class PolicyModel:
             )
         )
 
+class Adam:
+    def __init__(
+        self,
+        lr=0.01,
+        beta1=0.9,
+        beta2=0.999,
+        eps=1e-8
+    ):
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.t = 0
+        self.m = {}
+        self.v = {}
+
+    def update(self, key, param, grad):
+        if key not in self.m:
+            self.m[key] = 0.0
+            self.v[key] = 0.0
+        self.m[key] = (
+            self.beta1 * self.m[key] +
+            (1.0 - self.beta1) * grad
+        )
+        self.v[key] = (
+            self.beta2 * self.v[key] +
+            (1.0 - self.beta2) * grad * grad
+        )
+        m_hat = self.m[key] / (
+            1.0 - self.beta1 ** self.t
+        )
+        v_hat = self.v[key] / (
+            1.0 - self.beta2 ** self.t
+        )
+        param -= (
+            self.lr *
+            m_hat /
+            (math.sqrt(v_hat) + self.eps)
+        )
+        return param
+
+    def step(self):
+        self.t += 1
+
 def train(model, q_table, pressure):
     states = list(q_table.keys())
-    for epoch in range(EPOCHS):
+    opt = Adam(lr=0.01)
+    for epoch in range(MAX_EPOCHS):
         random.shuffle(states)
         total_loss = 0.0
         correct = 0
         for state in states:
+            opt.step()
             source, dest, prev_hop, node = state
             target = q_table[state]
             pred = model.predict(
@@ -236,26 +274,51 @@ def train(model, q_table, pressure):
             p_old = p_vec[:]
             n_old = n_vec[:]
             for k in range(model.d):
-                s_vec[k] -= LEARN_RATE * grad * (
+                s_grad = grad * (
                     n_old[k] + d_old[k]
                 )
-                d_vec[k] -= LEARN_RATE * grad * (
+                d_grad = grad * (
                     n_old[k] + s_old[k]
                 )
-                p_vec[k] -= LEARN_RATE * grad * (
+                p_grad = grad * (
                     n_old[k]
                 )
-                n_vec[k] -= LEARN_RATE * grad * (
+                n_grad = grad * (
                     s_old[k] +
                     d_old[k] +
                     p_old[k]
                 )
-            model.pressure_bias[node] -= (
-                LEARN_RATE *
-                grad *
-                pressure[node]
+                s_vec[k] = opt.update(
+                    ("S", source, k),
+                    s_vec[k],
+                    s_grad
+                )
+                d_vec[k] = opt.update(
+                    ("D", dest, k),
+                    d_vec[k],
+                    d_grad
+                )
+                p_vec[k] = opt.update(
+                    ("P", prev_hop, k),
+                    p_vec[k],
+                    p_grad
+                )
+                n_vec[k] = opt.update(
+                    ("N", node, k),
+                    n_vec[k],
+                    n_grad
+                )
+            pb_grad = grad * pressure[node]
+            model.pressure_bias[node] = opt.update(
+                ("PB", node),
+                model.pressure_bias[node],
+                pb_grad
             )
-            model.bias -= LEARN_RATE * grad
+            model.bias = opt.update(
+                ("B",),
+                model.bias,
+                grad
+            )
         acc = correct / len(states)
         if epoch % EPOCH_INTERVAL == 0:
             print(
@@ -264,7 +327,10 @@ def train(model, q_table, pressure):
                 f"acc={acc:.1%}"
             )
         if acc > 0.995:
-            print(f"[✓] converged at epoch {epoch}")
+            print(
+                f"Converged at epoch {epoch}. "
+                f"acc={acc:.1%}"
+            )
             break
 
 def print_pressure(pressure):
@@ -317,35 +383,41 @@ def print_policy(model, q_table, pressure, sample_size=40):
         )
         count += 1
 
+def load_nodes(path):
+    nodes = []
+    walls = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in line.rstrip(",").split("),")]
+            if len(parts) == 1:
+                coords = parts[0].strip("()")
+                x, y = coords.split(",")
+                nodes.append((int(x.strip()), int(y.strip())))
+            elif len(parts) == 2:
+                c1 = parts[0].strip("()")
+                c2 = parts[1].strip("()")
+                x1, y1 = c1.split(",")
+                x2, y2 = c2.split(",")
+                walls.append(((int(x1.strip()), int(y1.strip())), (int(x2.strip()), int(y2.strip()))))
+    return nodes, walls
+
 def main():
     random.seed(42)
-    n = len(NODES)
-    adj = build_adjacency()
+    nodes, walls = load_nodes("points.txt")
+    n = len(nodes)
+    adj = build_adjacency(nodes, walls)
     pressure = compute_pressure(adj, n)
-    q_table = build_q_table(
-        adj,
-        n,
-        pressure
-    )
+    q_table = build_q_table(adj, n, pressure)
     print(f"nodes: {n}")
     print(f"states: {len(q_table)}")
     print_pressure(pressure)
-    model = PolicyModel(
-        n=n,
-        d=LATENT_DIM
-    )
-    train(
-        model,
-        q_table,
-        pressure
-    )
+    model = PolicyModel(n=n, d=LATENT_DIM)
+    train(model, q_table, pressure)
     print_embeddings(model)
-    print_policy(
-        model,
-        q_table,
-        pressure
-    )
+    print_policy(model, q_table, pressure)
 
 if __name__ == "__main__":
     main()
-
