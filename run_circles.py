@@ -7,7 +7,7 @@ NODE_RADIUS = 8
 NUM_NODES = 6
 PULSE_SPEED = 2.1
 FRAME_MS = 40
-RING_POINTS = 45
+RING_POINTS = 60
 
 def segment_intersection_t(p1, p2, p3, p4):
     x1, y1 = p1
@@ -250,6 +250,7 @@ class MeshSimApp:
 def main():
     root = tk.Tk()
     MeshSimApp(root)
+    root.bind("<Control-q>", lambda e: root.destroy())
     root.mainloop()
 
 main()

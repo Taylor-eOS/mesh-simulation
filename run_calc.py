@@ -203,6 +203,7 @@ def main():
     canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg="white", highlightthickness=0)
     canvas.pack()
     canvas.bind("<Button-1>", lambda event: on_canvas_click(event, canvas))
+    root.bind("<Control-q>", lambda e: root.destroy())
     draw(canvas, NODES, WALLS)
     root.mainloop()
 

@@ -3,6 +3,7 @@ import tkinter as tk
 WIDTH, HEIGHT = 700, 500
 OUTPUT_FILE = "points.txt"
 GRID = 50
+HIT_RADIUS = 5
 
 def snap(x, y):
     return round(x / GRID) * GRID, round(y / GRID) * GRID
@@ -33,10 +34,34 @@ def write_file(points, lines):
         for (x1, y1), (x2, y2) in lines:
             f.write(f"({x1}, {y1}), ({x2}, {y2}),\n")
 
+def find_node(x, y, points, lines):
+    for i, (px, py) in enumerate(points):
+        if (px - x) ** 2 + (py - y) ** 2 <= HIT_RADIUS ** 2:
+            return ("point", i)
+    for i, ((x1, y1), (x2, y2)) in enumerate(lines):
+        if (x1 - x) ** 2 + (y1 - y) ** 2 <= HIT_RADIUS ** 2:
+            return ("line", i)
+        if (x2 - x) ** 2 + (y2 - y) ** 2 <= HIT_RADIUS ** 2:
+            return ("line", i)
+    return None
+
+def remove_node(hit, canvas, points, lines):
+    kind, i = hit
+    if kind == "point":
+        points.pop(i)
+    else:
+        lines.pop(i)
+    write_file(points, lines)
+    redraw(canvas, points, lines)
+
 def record_point(event, canvas, points, lines, space_held):
     x, y = event.x, event.y
     if space_held[0]:
         x, y = snap(x, y)
+    hit = find_node(x, y, points, lines)
+    if hit:
+        remove_node(hit, canvas, points, lines)
+        return
     points.append((x, y))
     write_file(points, lines)
     draw_point(canvas, x, y)
@@ -45,6 +70,10 @@ def record_line(event, canvas, points, lines, line_start, space_held):
     x, y = event.x, event.y
     if space_held[0]:
         x, y = snap(x, y)
+    hit = find_node(x, y, points, lines)
+    if hit:
+        remove_node(hit, canvas, points, lines)
+        return
     if line_start[0] is None:
         line_start[0] = (x, y)
         r = 4
@@ -85,7 +114,7 @@ def main():
     line_start = [None]
     open(OUTPUT_FILE, "w").close()
     root = tk.Tk()
-    root.title("Point Recorder — LMB: point, RMB: line (2 clicks), Ctrl+Z: undo, Space: snap")
+    root.title("Point Recorder — LMB: point/remove, RMB: line (2 clicks)/remove, Ctrl+Z: undo, Space: snap")
     root.resizable(False, False)
     canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg="white", highlightthickness=0)
     canvas.pack()
@@ -95,6 +124,7 @@ def main():
     root.bind("<Control-z>", lambda e: on_undo(e, canvas, points, lines, line_start))
     root.bind("<KeyPress-space>", lambda e: space_held.__setitem__(0, True))
     root.bind("<KeyRelease-space>", lambda e: space_held.__setitem__(0, False))
+    root.bind("<Control-q>", lambda e: root.destroy())
     root.mainloop()
 
 main()
