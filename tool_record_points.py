@@ -2,16 +2,16 @@ import tkinter as tk
 
 WIDTH, HEIGHT = 700, 500
 OUTPUT_FILE = "points.txt"
-GRID = 50
+GRID = 10
 HIT_RADIUS = 5
 
 def snap(x, y):
     return round(x / GRID) * GRID, round(y / GRID) * GRID
 
-def draw_point(canvas, x, y):
+def draw_point(canvas, x, y, index):
     r = 4
     canvas.create_oval(x - r, y - r, x + r, y + r, fill="#e74c3c", outline="#c0392b", width=1)
-    canvas.create_text(x + 10, y - 10, text=f"({x}, {y})", fill="#333333", font=("Arial", 9))
+    canvas.create_text(x + 10, y - 10, text=f"{index}: ({x}, {y})", fill="#333333", font=("Arial", 9))
 
 def draw_line(canvas, x1, y1, x2, y2):
     canvas.create_line(x1, y1, x2, y2, fill="#2980b9", width=2)
@@ -22,8 +22,8 @@ def draw_line(canvas, x1, y1, x2, y2):
 def redraw(canvas, points, lines):
     canvas.delete("all")
     draw_grid(canvas)
-    for x, y in points:
-        draw_point(canvas, x, y)
+    for i, (x, y) in enumerate(points):
+        draw_point(canvas, x, y, i)
     for (x1, y1), (x2, y2) in lines:
         draw_line(canvas, x1, y1, x2, y2)
 
@@ -64,7 +64,7 @@ def record_point(event, canvas, points, lines, space_held):
         return
     points.append((x, y))
     write_file(points, lines)
-    draw_point(canvas, x, y)
+    draw_point(canvas, x, y, len(points) - 1)
 
 def record_line(event, canvas, points, lines, line_start, space_held):
     x, y = event.x, event.y

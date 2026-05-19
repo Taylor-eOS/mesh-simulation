@@ -253,4 +253,5 @@ def main():
     root.bind("<Control-q>", lambda e: root.destroy())
     root.mainloop()
 
-main()
+if __name__ == "__main__":
+    main()

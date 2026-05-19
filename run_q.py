@@ -1,6 +1,7 @@
 import os
 import math
 import random
+import pickle
 from concurrent.futures import ProcessPoolExecutor
 from utils import ccw, segment_intersection, dot, sigmoid
 
@@ -505,6 +506,11 @@ def main():
     print_pressure(pressure)
     model = PolicyModel(n=n, d=LATENT_DIM)
     train(model, q_table, pressure)
+    with open("policy_model.pkl", "wb") as f:
+        pickle.dump({
+            "model": model,
+            "pressure": pressure
+        }, f)
     print_embeddings(model)
     print_policy(model, q_table, pressure)
 

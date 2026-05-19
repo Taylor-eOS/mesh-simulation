@@ -207,4 +207,5 @@ def main():
     draw(canvas, NODES, WALLS)
     root.mainloop()
 
-main()
+if __name__ == "__main__":
+    main()
