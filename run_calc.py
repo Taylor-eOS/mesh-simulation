@@ -1,5 +1,6 @@
 import tkinter as tk
 import math
+from utils import ccw, segment_intersection
 
 WIDTH, HEIGHT = 700, 500
 NODE_RADIUS = 12
@@ -15,15 +16,10 @@ NODES = [
 WALLS = [
     ((320, 0), (300, 210)),
     ((360, 500), (340, 290)),
+    ((560, 270), (700, 270)),
 ]
-DISTINCT_COLORS = ["#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#42d4f4", "#f032e6"]
+COLORS = ["#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#42d4f4", "#f032e6"]
 selected_origin = None
-
-def ccw(A, B, C):
-    return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
-
-def segment_intersection(p1, p2, p3, p4):
-    return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
 
 def nodes_connected(i, j, nodes, walls):
     for w in walls:
@@ -138,7 +134,7 @@ def draw(canvas, nodes, walls):
         multi_hop_paths = dijkstra_paths(selected_origin, nodes, walls)
         color_index = 0
         for target, path in multi_hop_paths.items():
-            color = DISTINCT_COLORS[color_index % len(DISTINCT_COLORS)]
+            color = COLORS[color_index % len(COLORS)]
             color_index += 1
             for step in range(len(path) - 1):
                 u, v = path[step], path[step + 1]
