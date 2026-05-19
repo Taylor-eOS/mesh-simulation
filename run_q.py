@@ -4,7 +4,7 @@ import random
 from concurrent.futures import ProcessPoolExecutor
 from utils import ccw, segment_intersection, dot, sigmoid
 
-LATENT_DIM = 128
+LATENT_DIM = 16
 MAX_EPOCHS = 10000
 EPOCH_INTERVAL = 10
 PRESSURE_ITERATIONS = 30
@@ -68,8 +68,15 @@ def dijkstra(origin, adj, n, pressure):
             congestion = pressure_weight(pressure[v])
             cost = base * congestion
             nd = dist[u] + cost
-
+            temperature = 0.15
             if nd < dist[v]:
+                if dist[v] < float("inf"):
+                    delta = dist[v] - nd
+                    accept_prob = sigmoid(
+                        delta / temperature
+                    )
+                    if random.random() > accept_prob:
+                        continue
                 dist[v] = nd
                 pred[v] = u
     paths = {}
@@ -96,15 +103,30 @@ def compute_pressure(adj, n):
     workers = os.cpu_count() or 1
     for _ in range(PRESSURE_ITERATIONS):
         traffic = [0.0 for _ in range(n)]
-        args = [(source, adj, n, pressure) for source in range(n)]
+        args = [
+            (source, adj, n, pressure)
+            for source in range(n)
+        ]
         with ProcessPoolExecutor(max_workers=workers) as ex:
             for source, paths in ex.map(_dijkstra_worker, args):
                 for dest, path in paths.items():
                     if len(path) <= 2:
                         continue
+                    path_pressure = 0.0
+                    for node in path[1:-1]:
+                        path_pressure += pressure[node]
+                    reroute_factor = 1.0 / (
+                        1.0 + path_pressure * 2.5
+                    )
                     for hop_index, node in enumerate(path[1:-1], start=1):
                         remaining = len(path) - hop_index
-                        traffic[node] += 1.0 + remaining * 0.15
+                        load = (
+                            1.0 +
+                            remaining * 0.15
+                        )
+                        traffic[node] += (
+                            load * reroute_factor
+                        )
         peak = max(max(traffic), 1e-9)
         for i in range(n):
             norm = traffic[i] / peak
@@ -131,12 +153,23 @@ def build_q_table(adj, n, pressure):
         for source, paths in ex.map(_dijkstra_worker, args):
             for dest, path in paths.items():
                 relay_nodes = set(path[1:-1])
-                for prev_hop in range(n):
-                    for node in range(n):
-                        if node == source:
-                            continue
-                        if node == dest:
-                            continue
+                legal_prev = set()
+                for path_index in range(1, len(path)):
+                    current = path[path_index]
+                    previous = path[path_index - 1]
+                    legal_prev.add((current, previous))
+                for node in range(n):
+                    if node == source:
+                        continue
+                    if node == dest:
+                        continue
+                    incoming_prev = [
+                        prev for current, prev in legal_prev
+                        if current == node
+                    ]
+                    if not incoming_prev:
+                        incoming_prev = [source]
+                    for prev_hop in incoming_prev:
                         state = (source, dest, prev_hop, node)
                         if node in relay_nodes:
                             target = relay_probability(
@@ -145,6 +178,8 @@ def build_q_table(adj, n, pressure):
                             )
                         else:
                             target = 0.0
+                            if random.random() < 0.8:
+                                continue
                         q[state] = target
     return q
 
@@ -242,10 +277,18 @@ class Adam:
 def train(model, q_table, pressure):
     states = list(q_table.keys())
     opt = Adam(lr=0.01)
+    best_f1 = 0.0
+    best_epoch = 0
+    epochs_without_improvement = 0
+    patience = 120
+    min_delta = 0.002
     for epoch in range(MAX_EPOCHS):
         random.shuffle(states)
         total_loss = 0.0
-        correct = 0
+        tp = 0
+        fp = 0
+        tn = 0
+        fn = 0
         for state in states:
             opt.step()
             source, dest, prev_hop, node = state
@@ -258,8 +301,16 @@ def train(model, q_table, pressure):
                 pressure
             )
             err = pred - target
-            if (pred >= 0.5) == (target >= 0.5):
-                correct += 1
+            pred_label = 1 if pred >= 0.5 else 0
+            target_label = 1 if target >= 0.5 else 0
+            if pred_label == 1 and target_label == 1:
+                tp += 1
+            elif pred_label == 1 and target_label == 0:
+                fp += 1
+            elif pred_label == 0 and target_label == 0:
+                tn += 1
+            elif pred_label == 0 and target_label == 1:
+                fn += 1
             total_loss += -(
                 target * math.log(pred + 1e-9) +
                 (1 - target) * math.log(1 - pred + 1e-9)
@@ -319,17 +370,55 @@ def train(model, q_table, pressure):
                 model.bias,
                 grad
             )
-        acc = correct / len(states)
+        total = tp + fp + tn + fn
+        acc = (tp + tn) / max(total, 1)
+        precision = tp / max(tp + fp, 1)
+        recall = tp / max(tp + fn, 1)
+        if precision + recall > 0:
+            f1 = (
+                2.0 *
+                precision *
+                recall /
+                (precision + recall)
+            )
+        else:
+            f1 = 0.0
+        improvement = f1 - best_f1
+        if improvement > min_delta:
+            best_f1 = f1
+            best_epoch = epoch
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
         if epoch % EPOCH_INTERVAL == 0:
             print(
                 f"epoch={epoch:5d}  "
                 f"loss={total_loss/len(states):.5f}  "
                 f"acc={acc:.1%}"
             )
-        if acc > 0.995:
             print(
-                f"Converged at epoch {epoch}. "
-                f"acc={acc:.1%}"
+                f"tp={tp}  "
+                f"fp={fp}  "
+                f"tn={tn}  "
+                f"fn={fn}"
+            )
+            print(
+                f"precision={precision:.4f}  "
+                f"recall={recall:.4f}  "
+                f"f1={f1:.4f}  "
+                f"best_f1={best_f1:.4f}"
+            )
+        if f1 >= 0.995:
+            print(
+                f"Perfect convergence at epoch {epoch}. "
+                f"f1={f1:.4f}"
+            )
+            break
+        if epochs_without_improvement >= patience:
+            print(
+                f"Stabilized at epoch {epoch}. "
+                f"best_f1={best_f1:.4f} "
+                f"(best epoch={best_epoch})"
             )
             break
 
@@ -345,7 +434,7 @@ def print_embeddings(model):
         d = " ".join(f"{v:+.3f}" for v in model.D[i])
         p = " ".join(f"{v:+.3f}" for v in model.P[i])
         n = " ".join(f"{v:+.3f}" for v in model.N[i])
-        print(f"\nNode {i}")
+        print(f"Node {i}")
         print(f"  source-role : {s}")
         print(f"  dest-role   : {d}")
         print(f"  prev-role   : {p}")
