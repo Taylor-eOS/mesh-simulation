@@ -89,7 +89,17 @@ class PolicyModel:
         self.pressure_bias = []
         self.bias = 0.0
 
+    def ensure_compatibility(self):
+        if not hasattr(self, "pressure_bias"):
+            self.pressure_bias = [0.0 for _ in range(self.n)]
+        if not hasattr(self, "bias"):
+            self.bias = 0.0
+        if len(self.pressure_bias) < self.n:
+            missing = self.n - len(self.pressure_bias)
+            self.pressure_bias.extend([0.0] * missing)
+
     def score(self, source, dest, prev_hop, node, pressure):
+        self.ensure_compatibility()
         s = 0.0
         s += dot(self.S[source], self.N[node])
         s += dot(self.D[dest], self.N[node])
@@ -100,50 +110,107 @@ class PolicyModel:
         return s
 
     def predict(self, source, dest, prev_hop, node, pressure):
-        return sigmoid(self.score(source, dest, prev_hop, node, pressure))
+        return sigmoid(
+            self.score(
+                source,
+                dest,
+                prev_hop,
+                node,
+                pressure
+            )
+        )
 
 def load_model(path):
     with open(path, "rb") as f:
-        return pickle.load(f)
+        data = pickle.load(f)
+    model = data["model"]
+    if not hasattr(model, "pressure_bias"):
+        model.pressure_bias = [0.0 for _ in range(model.n)]
+    if not hasattr(model, "bias"):
+        model.bias = 0.0
+    if len(model.pressure_bias) < model.n:
+        missing = model.n - len(model.pressure_bias)
+        model.pressure_bias.extend([0.0] * missing)
+    data["model"] = model
+    return data
 
-def reconstruct_route(model, adj, pressure, source, dest, nodes, max_steps=256, beam_width=16):
+def reconstruct_route(model, adj, pressure, source, dest, nodes, max_steps=256, beam_width=32):
     def distance(a, b):
-        return math.hypot(nodes[b][0] - nodes[a][0], nodes[b][1] - nodes[a][1])
-    beams = [([source], source, source, set([source]), 0.0)]
-    best_partial = None
-    best_distance = float("inf")
+        return math.hypot(
+            nodes[b][0] - nodes[a][0],
+            nodes[b][1] - nodes[a][1]
+        )
+    beams = [
+        (
+            [source],
+            source,
+            source,
+            set([source]),
+            0.0
+        )
+    ]
+    best_route = None
+    best_score = -float("inf")
     for _ in range(max_steps):
         expanded = []
-        for route, current, previous, visited, total_score in beams:
+        for route, current, previous, visited, score in beams:
             if current == dest:
-                return route
+                if score > best_score:
+                    best_score = score
+                    best_route = route
+                continue
             current_dist = distance(current, dest)
-            if current_dist < best_distance:
-                best_distance = current_dist
-                best_partial = route
-            neighbors = adj.get(current, [])
-            for neighbor, sig in neighbors:
+            for neighbor, sig in adj.get(current, []):
                 if neighbor in visited:
                     continue
-                prob = model.predict(source, dest, previous, neighbor, pressure)
+                prob = model.predict(
+                    source,
+                    dest,
+                    previous,
+                    neighbor,
+                    pressure
+                )
                 next_dist = distance(neighbor, dest)
-                progress = (current_dist - next_dist) / MAX_DISTANCE
-                signal_bonus = (sig + 130.0) / 100.0
-                score = total_score + prob * 2.5 + progress * 4.0 + signal_bonus * 0.5
+                progress = (
+                    current_dist - next_dist
+                ) / MAX_DISTANCE
+                signal_quality = (
+                    sig + 130.0
+                ) / 100.0
+                hop_score = 0.0
+                hop_score += math.log(prob + 1e-9) * 3.0
+                hop_score += progress * 1.2
+                hop_score += signal_quality * 0.4
+                hop_score -= pressure[neighbor] * 2.5
+                hop_score -= 0.15
                 if neighbor == dest:
-                    score += 1000.0
-                expanded.append((route + [neighbor], neighbor, current, visited | {neighbor}, score))
+                    hop_score += 5.0
+                expanded.append((
+                    route + [neighbor],
+                    neighbor,
+                    current,
+                    visited | {neighbor},
+                    score + hop_score
+                ))
         if not expanded:
             break
-        expanded.sort(key=lambda x: x[4], reverse=True)
+        expanded.sort(
+            key=lambda x: x[4],
+            reverse=True
+        )
         beams = expanded[:beam_width]
-    return best_partial
+    return best_route
 
-def path_metrics(route, adj):
+def path_metrics(route, adj, pressure):
     if not route:
         return None
     total_signal = 0.0
-    weakest = 999.0
+    weakest_signal = 999.0
+    total_pressure = 0.0
+    bottleneck_pressure = 0.0
+    airtime_cost = 0.0
+    retransmission_risk = 0.0
+    delivery_probability = 1.0
     for i in range(len(route) - 1):
         u = route[i]
         v = route[i + 1]
@@ -155,13 +222,63 @@ def path_metrics(route, adj):
         if sig is None:
             continue
         total_signal += sig
-        weakest = min(weakest, sig)
+        weakest_signal = min(weakest_signal, sig)
+        norm_sig = (sig + 130.0) / 100.0
+        norm_sig = max(0.01, min(1.0, norm_sig))
+        hop_pressure = pressure[v]
+        total_pressure += hop_pressure
+        bottleneck_pressure = max(
+            bottleneck_pressure,
+            hop_pressure
+        )
+        link_airtime = (
+            1.0 / (norm_sig ** 2.5)
+        ) * (
+            1.0 + hop_pressure * 4.0
+        )
+        airtime_cost += link_airtime
+        hop_success = (
+            norm_sig *
+            (1.0 - hop_pressure * 0.7)
+        )
+        hop_success = max(
+            0.02,
+            min(0.99, hop_success)
+        )
+        delivery_probability *= hop_success
+        retransmission_risk += (
+            1.0 - hop_success
+        )
     hops = len(route) - 1
-    if hops == 0:
-        avg_signal = 0.0
-    else:
-        avg_signal = total_signal / hops
-    return {"hops": hops, "avg_signal": avg_signal, "weakest_signal": weakest}
+    avg_signal = (
+        total_signal / max(hops, 1)
+    )
+    avg_pressure = (
+        total_pressure / max(hops, 1)
+    )
+    estimated_latency = (
+        airtime_cost * 12.0
+    )
+    congestion_penalty = (
+        avg_pressure *
+        hops
+    )
+    route_stability = (
+        delivery_probability /
+        (1.0 + congestion_penalty)
+    )
+    return {
+        "hops": hops,
+        "avg_signal": avg_signal,
+        "weakest_signal": weakest_signal,
+        "avg_pressure": avg_pressure,
+        "bottleneck_pressure": bottleneck_pressure,
+        "airtime_cost": airtime_cost,
+        "estimated_latency": estimated_latency,
+        "delivery_probability": delivery_probability,
+        "retransmission_risk": retransmission_risk,
+        "route_stability": route_stability
+    }
 
 def draw_connection_graph(canvas, nodes, walls, adj):
     for i in range(len(nodes)):
@@ -210,19 +327,27 @@ def draw_walls(canvas, walls):
 def draw_info_panel(canvas, route, metrics):
     if selected_origin is None or selected_destination is None or route is None:
         return
-    panel_width = 520
-    panel_height = 120
-    x, y = 20, HEIGHT - panel_height - 20
+    panel_width = 620
+    panel_height = 190
+    x = 20
+    y = HEIGHT - panel_height - 20
     canvas.create_rectangle(x, y, x + panel_width, y + panel_height, fill="#ffffff", outline="#cccccc", width=2)
     canvas.create_text(x + 15, y + 20, anchor="w", text=f"{selected_origin} -> {selected_destination}", font=("Arial", 14, "bold"))
     canvas.create_text(x + 15, y + 50, anchor="w", text=f"Route: {' -> '.join(map(str, route))}", font=("Arial", 11))
-    canvas.create_text(x + 15, y + 80, anchor="w", text=f"Hops={metrics['hops']}   Avg={metrics['avg_signal']:.1f} dBm   Weakest={metrics['weakest_signal']:.1f} dBm", font=("Arial", 11))
+    canvas.create_text(x + 15, y + 80, anchor="w", text=f"Hops={metrics['hops']}    Avg RSSI={metrics['avg_signal']:.1f} dBm    Weakest={metrics['weakest_signal']:.1f} dBm", font=("Arial", 11))
+    canvas.create_text(x + 15, y + 105, anchor="w", text=f"Avg Pressure={metrics['avg_pressure']:.2f}    Bottleneck={metrics['bottleneck_pressure']:.2f}", font=("Arial", 11))
+    canvas.create_text(x + 15, y + 130, anchor="w", text=f"Airtime Cost={metrics['airtime_cost']:.2f}    Latency≈{metrics['estimated_latency']:.1f}", font=("Arial", 11))
+    canvas.create_text(x + 15, y + 155, anchor="w", text=f"Delivery={metrics['delivery_probability']:.3f}    Retransmit Risk={metrics['retransmission_risk']:.3f}    Stability={metrics['route_stability']:.3f}", font=("Arial", 11))
 
 def redraw(canvas, nodes, walls, adj, model, pressure):
     canvas.delete("all")
     route = None
     metrics = None
-    if selected_origin is not None and selected_destination is not None and selected_origin != selected_destination:
+    if (
+        selected_origin is not None and
+        selected_destination is not None and
+        selected_origin != selected_destination
+    ):
         route = reconstruct_route(
             model,
             adj,
@@ -232,7 +357,11 @@ def redraw(canvas, nodes, walls, adj, model, pressure):
             nodes
         )
         if route:
-            metrics = path_metrics(route, adj)
+            metrics = path_metrics(
+                route,
+                adj,
+                pressure
+            )
     draw_connection_graph(canvas, nodes, walls, adj)
     draw_route(canvas, nodes, route, "#ff8800")
     draw_walls(canvas, walls)
