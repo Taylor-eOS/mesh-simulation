@@ -111,10 +111,7 @@ def shortest_path(source, dest, adj, pressure):
         used[u] = True
         for v, sig in adj[u]:
             base = link_cost(sig)
-            congestion = (
-                1.0 +
-                pressure[v] * PRESSURE_COST
-            )
+            congestion = 1.0 + pressure[v] * PRESSURE_COST
             nd = dist[u] + base * congestion
             if nd < dist[v]:
                 dist[v] = nd
@@ -137,30 +134,21 @@ def compute_pressure(adj, n):
             for dest in range(n):
                 if source == dest:
                     continue
-                path = shortest_path(
-                    source,
-                    dest,
-                    adj,
-                    pressure
-                )
+                path = shortest_path(source, dest, adj, pressure)
                 if path is None:
                     continue
                 if len(path) <= 2:
                     continue
                 for hop_index, node in enumerate(path[1:-1], start=1):
                     remaining = len(path) - hop_index
-                    load = (
-                        1.0 +
-                        remaining * 0.25
-                    )
+                    load = 1.0 + remaining * 0.25
                     traffic[node] += load
         peak = max(max(traffic), 1e-9)
         next_pressure = [0.0 for _ in range(n)]
         for i in range(n):
             normalized = traffic[i] / peak
             next_pressure[i] = (
-                pressure[i] * PRESSURE_DECAY +
-                normalized * PRESSURE_GAIN
+                pressure[i] * PRESSURE_DECAY + normalized * PRESSURE_GAIN
             )
         pressure = next_pressure
     peak = max(max(pressure), 1e-9)
@@ -174,163 +162,61 @@ def relay_probability(node_pressure, path_len):
     x = congestion * 0.75 + stretch * 0.25
     return max(0.02, min(0.98, x))
 
-def build_q_table(adj, n, pressure):
-    q = {}
-    all_neighbors = {}
-    for node in range(n):
-        all_neighbors[node] = [
-            neighbor
-            for neighbor, _ in adj[node]
-        ]
+def build_training_data(adj, nodes, pressure):
+    samples = []
+    n = len(nodes)
     for source in range(n):
-        paths = dijkstra(
-            source,
-            adj,
-            n,
-            pressure
-        )
-        for dest, primary_path in paths.items():
-            candidate_paths = [primary_path]
-            for _ in range(24):
-                perturbed = [
-                    p + random.uniform(-0.25, 0.25)
-                    for p in pressure
-                ]
-                alt_paths = dijkstra(
-                    source,
-                    adj,
-                    n,
-                    perturbed
-                )
-                if dest not in alt_paths:
-                    continue
-                candidate = alt_paths[dest]
-                if candidate not in candidate_paths:
-                    candidate_paths.append(candidate)
-            path_scores = []
-            for path in candidate_paths:
-                total_cost = 0.0
-                for i in range(len(path) - 1):
-                    u = path[i]
-                    v = path[i + 1]
-                    sig = None
-                    for neighbor, s in adj[u]:
-                        if neighbor == v:
-                            sig = s
-                            break
-                    if sig is None:
-                        continue
-                    signal_cost = (
-                        1.0 /
-                        (((sig + 130.0) / 100.0) ** 2.0)
-                    )
-                    congestion_cost = (
-                        1.0 +
-                        pressure[v] * 8.0
-                    )
-                    total_cost += (
-                        signal_cost *
-                        congestion_cost
-                    )
-                path_scores.append(
-                    1.0 / max(total_cost, 1e-6)
-                )
-            total_score = sum(path_scores)
-            if total_score <= 0:
+        paths = dijkstra(source, adj, n, pressure)
+        for dest, path in paths.items():
+            if len(path) < 2:
                 continue
-            positive_states = {}
-            for path, score in zip(
-                candidate_paths,
-                path_scores
-            ):
-                probability = score / total_score
-                for hop_index in range(
-                    1,
-                    len(path) - 1
-                ):
-                    node = path[hop_index]
+            for hop_index in range(len(path) - 1):
+                current = path[hop_index]
+                if hop_index == 0:
+                    prev_hop = current
+                else:
                     prev_hop = path[hop_index - 1]
-                    state = (
-                        source,
-                        dest,
-                        prev_hop,
-                        node
-                    )
-                    if state not in positive_states:
-                        positive_states[state] = 0.0
-                    positive_states[state] += probability
-            for state, value in positive_states.items():
-                q[state] = min(1.0, value)
-            for state in list(positive_states.keys()):
-                source, dest, prev_hop, correct_node = state
-                for candidate in all_neighbors[prev_hop]:
-                    if candidate == correct_node:
+                correct_next = path[hop_index + 1]
+                current_distance = math.hypot(
+                    nodes[dest][0] - nodes[current][0],
+                    nodes[dest][1] - nodes[current][1],
+                )
+                for neighbor, sig in adj[current]:
+                    if neighbor == prev_hop:
                         continue
-                    negative_state = (
-                        source,
-                        dest,
-                        prev_hop,
-                        candidate
+                    neighbor_distance = math.hypot(
+                        nodes[dest][0] - nodes[neighbor][0],
+                        nodes[dest][1] - nodes[neighbor][1],
                     )
-                    if negative_state not in q:
-                        q[negative_state] = 0.0
-    return q
+                    progress = (current_distance - neighbor_distance) / 500.0
+                    signal = (sig + 130.0) / 100.0
+                    congestion = pressure[neighbor]
+                    features = [progress, signal, congestion]
+                    target = 1.0 if neighbor == correct_next else 0.0
+                    samples.append((features, target))
+    return samples
 
 class PolicyModel:
-    def __init__(self, n, d):
-        self.n = n
-        self.d = d
-        self.S = [
-            [random.gauss(0, 0.2) for _ in range(d)]
-            for _ in range(n)
+    def __init__(self, feature_dim):
+        self.feature_dim = feature_dim
+        self.weights = [
+            random.uniform(-0.1, 0.1)
+            for _ in range(feature_dim)
         ]
-        self.D = [
-            [random.gauss(0, 0.2) for _ in range(d)]
-            for _ in range(n)
-        ]
-        self.P = [
-            [random.gauss(0, 0.2) for _ in range(d)]
-            for _ in range(n)
-        ]
-        self.N = [
-            [random.gauss(0, 0.2) for _ in range(d)]
-            for _ in range(n)
-        ]
-        self.pressure_bias = [
-            random.gauss(0, 0.1)
-            for _ in range(n)
-        ]
-        self.bias = random.gauss(0, 0.1)
+        self.bias = 0.0
 
-    def score(self, source, dest, prev_hop, node, pressure):
-        s = 0.0
-        s += dot(self.S[source], self.N[node])
-        s += dot(self.D[dest], self.N[node])
-        s += dot(self.P[prev_hop], self.N[node])
-        s += dot(self.S[source], self.D[dest])
-        s += pressure[node] * self.pressure_bias[node]
-        s += self.bias
-        return s
-
-    def predict(self, source, dest, prev_hop, node, pressure):
-        return sigmoid(
-            self.score(
-                source,
-                dest,
-                prev_hop,
-                node,
-                pressure
-            )
-        )
+    def predict(self, features):
+        s = self.bias
+        for w, x in zip(self.weights, features):
+            s += w * x
+        if s >= 0.0:
+            z = math.exp(-s)
+            return 1.0 / (1.0 + z)
+        z = math.exp(s)
+        return z / (1.0 + z)
 
 class Adam:
-    def __init__(
-        self,
-        lr=0.01,
-        beta1=0.9,
-        beta2=0.999,
-        eps=1e-8
-    ):
+    def __init__(self, lr=0.01, beta1=0.9, beta2=0.999, eps=1e-8):
         self.lr = lr
         self.beta1 = beta1
         self.beta2 = beta2
@@ -343,56 +229,35 @@ class Adam:
         if key not in self.m:
             self.m[key] = 0.0
             self.v[key] = 0.0
-        self.m[key] = (
-            self.beta1 * self.m[key] +
-            (1.0 - self.beta1) * grad
-        )
+        self.m[key] = self.beta1 * self.m[key] + (1.0 - self.beta1) * grad
         self.v[key] = (
-            self.beta2 * self.v[key] +
-            (1.0 - self.beta2) * grad * grad
+            self.beta2 * self.v[key] + (1.0 - self.beta2) * grad * grad
         )
-        m_hat = self.m[key] / (
-            1.0 - self.beta1 ** self.t
-        )
-        v_hat = self.v[key] / (
-            1.0 - self.beta2 ** self.t
-        )
-        param -= (
-            self.lr *
-            m_hat /
-            (math.sqrt(v_hat) + self.eps)
-        )
+        m_hat = self.m[key] / (1.0 - self.beta1**self.t)
+        v_hat = self.v[key] / (1.0 - self.beta2**self.t)
+        param -= self.lr * m_hat / (math.sqrt(v_hat) + self.eps)
         return param
 
     def step(self):
         self.t += 1
 
-def train(model, q_table, pressure):
-    states = list(q_table.keys())
-    opt = Adam(lr=0.01)
+def train(model, samples):
+    opt = Adam(lr=0.003)
     best_f1 = 0.0
     best_epoch = 0
     epochs_without_improvement = 0
     patience = 120
     min_delta = 0.002
     for epoch in range(MAX_EPOCHS):
-        random.shuffle(states)
+        random.shuffle(samples)
         total_loss = 0.0
         tp = 0
         fp = 0
         tn = 0
         fn = 0
-        for state in states:
+        for features, target in samples:
             opt.step()
-            source, dest, prev_hop, node = state
-            target = q_table[state]
-            pred = model.predict(
-                source,
-                dest,
-                prev_hop,
-                node,
-                pressure
-            )
+            pred = model.predict(features)
             err = pred - target
             pred_label = 1 if pred >= 0.5 else 0
             target_label = 1 if target >= 0.5 else 0
@@ -402,78 +267,22 @@ def train(model, q_table, pressure):
                 fp += 1
             elif pred_label == 0 and target_label == 0:
                 tn += 1
-            elif pred_label == 0 and target_label == 1:
+            else:
                 fn += 1
             total_loss += -(
-                target * math.log(pred + 1e-9) +
-                (1 - target) * math.log(1 - pred + 1e-9)
+                target * math.log(pred + 1e-9)
+                + (1.0 - target) * math.log(1.0 - pred + 1e-9)
             )
-            grad = err
-            s_vec = model.S[source]
-            d_vec = model.D[dest]
-            p_vec = model.P[prev_hop]
-            n_vec = model.N[node]
-            s_old = s_vec[:]
-            d_old = d_vec[:]
-            p_old = p_vec[:]
-            n_old = n_vec[:]
-            for k in range(model.d):
-                s_grad = grad * (
-                    n_old[k] + d_old[k]
-                )
-                d_grad = grad * (
-                    n_old[k] + s_old[k]
-                )
-                p_grad = grad * (
-                    n_old[k]
-                )
-                n_grad = grad * (
-                    s_old[k] +
-                    d_old[k] +
-                    p_old[k]
-                )
-                s_vec[k] = opt.update(
-                    ("S", source, k),
-                    s_vec[k],
-                    s_grad
-                )
-                d_vec[k] = opt.update(
-                    ("D", dest, k),
-                    d_vec[k],
-                    d_grad
-                )
-                p_vec[k] = opt.update(
-                    ("P", prev_hop, k),
-                    p_vec[k],
-                    p_grad
-                )
-                n_vec[k] = opt.update(
-                    ("N", node, k),
-                    n_vec[k],
-                    n_grad
-                )
-            pb_grad = grad * pressure[node]
-            model.pressure_bias[node] = opt.update(
-                ("PB", node),
-                model.pressure_bias[node],
-                pb_grad
-            )
-            model.bias = opt.update(
-                ("B",),
-                model.bias,
-                grad
-            )
+            for i in range(model.feature_dim):
+                grad = err * features[i]
+                model.weights[i] = opt.update(("W", i), model.weights[i], grad)
+            model.bias = opt.update(("B",), model.bias, err)
         total = tp + fp + tn + fn
         acc = (tp + tn) / max(total, 1)
         precision = tp / max(tp + fp, 1)
         recall = tp / max(tp + fn, 1)
-        if precision + recall > 0:
-            f1 = (
-                2.0 *
-                precision *
-                recall /
-                (precision + recall)
-            )
+        if precision + recall > 0.0:
+            f1 = 2.0 * precision * recall / (precision + recall)
         else:
             f1 = 0.0
         improvement = f1 - best_f1
@@ -486,26 +295,14 @@ def train(model, q_table, pressure):
         if epoch % EPOCH_INTERVAL == 0:
             print(
                 f"epoch={epoch:5d}  "
-                f"loss={total_loss/len(states):.5f}  "
-                f"acc={acc:.1%}"
-            )
-            print(
-                f"tp={tp}  "
-                f"fp={fp}  "
-                f"tn={tn}  "
-                f"fn={fn}"
-            )
-            print(
+                f"loss={total_loss/len(samples):.5f}  "
+                f"acc={acc:.1%}  "
                 f"precision={precision:.4f}  "
                 f"recall={recall:.4f}  "
-                f"f1={f1:.4f}  "
-                f"best_f1={best_f1:.4f}"
-            )
-        if f1 >= 0.995:
-            print(
-                f"Perfect convergence at epoch {epoch}. "
                 f"f1={f1:.4f}"
             )
+        if f1 >= 0.995:
+            print(f"Perfect convergence at epoch {epoch}. " f"f1={f1:.4f}")
             break
         if epochs_without_improvement >= patience:
             print(
@@ -541,13 +338,7 @@ def print_policy(model, q_table, pressure, sample_size=40):
         if count >= sample_size:
             break
         source, dest, prev_hop, node = state
-        pred = model.predict(
-            source,
-            dest,
-            prev_hop,
-            node,
-            pressure
-        )
+        pred = model.predict(source, dest, prev_hop, node, pressure)
         if pred < 0.01 and target < 0.01:
             continue
         label = 1 if pred >= 0.5 else 0
@@ -592,19 +383,20 @@ def main():
     n = len(nodes)
     adj = build_adjacency(nodes, walls)
     pressure = compute_pressure(adj, n)
-    q_table = build_q_table(adj, n, pressure)
+    samples = build_training_data(adj, nodes, pressure)
     print(f"nodes: {n}")
-    print(f"states: {len(q_table)}")
+    print(f"samples: {len(samples)}")
     print_pressure(pressure)
-    model = PolicyModel(n=n, d=LATENT_DIM)
-    train(model, q_table, pressure)
+    feature_dim = len(samples[0][0])
+    model = PolicyModel(
+        feature_dim=feature_dim
+    )
+    train(model, samples)
     with open("policy_model.pkl", "wb") as f:
         pickle.dump({
             "model": model,
             "pressure": pressure
         }, f)
-    print_embeddings(model)
-    print_policy(model, q_table, pressure)
 
 if __name__ == "__main__":
     main()
