@@ -1,45 +1,34 @@
 import math
 import random
+from oracle import compute_node_fingerprints, extract_structural_features
 from utils import normalize_signal
-from oracle import bfs_hops, extract_local_features, propagation_quality, simulate_propagation
 
 MAX_EPOCHS = 10000
 EPOCH_INTERVAL = 10
-MAX_HOP_NORM = 20.0
-FEATURE_DIM = 6
+MAX_DEGREE_NORM = 64.0
+FEATURE_DIM = 5
+TARGET_KEY = "mean_utility"
 
-def features_to_vector(features, n_nodes):
+def features_to_vector(features):
     return [
-        min(features["expected_rx_count"], 10.0) / 10.0,
-        normalize_signal(features["best_signal"]),
-        normalize_signal(features["mean_signal"]),
-        features["neighbor_count"] / max(n_nodes - 1, 1),
-        features["hop_count"] / MAX_HOP_NORM if features["hop_count"] >= 0 else 1.0,
-        features["node_p_reach"],
+        min(features["degree"], MAX_DEGREE_NORM) / MAX_DEGREE_NORM,
+        normalize_signal(features["mean_out_signal"]),
+        normalize_signal(features["mean_in_signal"]),
+        min(features["neighbor_mean_degree"], MAX_DEGREE_NORM) / MAX_DEGREE_NORM,
+        min(features["weighted_in_degree"], MAX_DEGREE_NORM) / MAX_DEGREE_NORM,
     ]
 
 def build_training_data(nodes, adj, radj):
-    n = len(nodes)
+    fingerprints = compute_node_fingerprints(nodes, adj, radj)
     samples = []
-    full_set = set(range(n))
-    for source in range(n):
-        relay_set = full_set - {source}
-        p_full = simulate_propagation(source, relay_set, adj, radj, n)
-        hops = bfs_hops(source, adj, n)
-        q_full = propagation_quality(source, relay_set, adj, radj, n, p_full)
-        for node in relay_set:
-            features = extract_local_features(
-                node, source, relay_set, adj, radj, n, p_full, hops
-            )
-            p_reduced = simulate_propagation(source, relay_set - {node}, adj, radj, n)
-            q_reduced = propagation_quality(
-                source, relay_set - {node}, adj, radj, n, p_reduced
-            )
-            utility = q_full - q_reduced
-            samples.append((features_to_vector(features, n), utility))
-    return samples
+    for node, fp in fingerprints.items():
+        features = extract_structural_features(node, adj, radj)
+        feature_vector = features_to_vector(features)
+        target = fp[TARGET_KEY]
+        samples.append((feature_vector, target))
+    return samples, fingerprints
 
-class RelayUtilityModel:
+class RelayFingerprintModel:
     def __init__(self, feature_dim):
         self.feature_dim = feature_dim
         self.weights = [random.uniform(-0.1, 0.1) for _ in range(feature_dim)]
@@ -75,31 +64,40 @@ class Adam:
         param -= self.lr * m_hat / (math.sqrt(v_hat) + self.eps)
         return param
 
+def evaluate(model, samples):
+    total_sq_err = 0.0
+    total_abs_err = 0.0
+    targets = [target for _features, target in samples]
+    mean_target = sum(targets) / len(targets)
+    ss_tot = sum((t - mean_target) ** 2 for t in targets)
+    for features, target in samples:
+        pred = model.predict(features)
+        err = pred - target
+        total_sq_err += err * err
+        total_abs_err += abs(err)
+    mse = total_sq_err / len(samples)
+    mae = total_abs_err / len(samples)
+    r2 = 1.0 - total_sq_err / max(ss_tot, 1e-12)
+    return mse, mae, r2
+
 def train(model, samples):
     opt = Adam()
     best_mae = float("inf")
     best_epoch = 0
     epochs_without_improvement = 0
     patience = 120
-    min_delta = 1e-4
-    mean_target = sum(t for _f, t in samples) / len(samples)
-    ss_tot = sum((t - mean_target) ** 2 for _f, t in samples)
+    min_delta = 1e-5
     for epoch in range(MAX_EPOCHS):
         random.shuffle(samples)
-        total_sq_err = 0.0
-        total_abs_err = 0.0
         for features, target in samples:
             opt.step()
             pred = model.predict(features)
             err = pred - target
-            total_sq_err += err * err
-            total_abs_err += abs(err)
             for i in range(model.feature_dim):
-                model.weights[i] = opt.update(("W", i), model.weights[i], 2.0 * err * features[i])
+                grad = 2.0 * err * features[i]
+                model.weights[i] = opt.update(("W", i), model.weights[i], grad)
             model.bias = opt.update(("B",), model.bias, 2.0 * err)
-        mae = total_abs_err / len(samples)
-        mse = total_sq_err / len(samples)
-        r2 = 1.0 - total_sq_err / max(ss_tot, 1e-12)
+        mse, mae, r2 = evaluate(model, samples)
         improvement = best_mae - mae
         if improvement > min_delta:
             best_mae = mae
@@ -114,13 +112,30 @@ def train(model, samples):
                 f"mae={mae:.6f}  "
                 f"r2={r2:.4f}"
             )
-        if mae < 1e-5:
-            print(f"Converged at epoch {epoch}. mae={mae:.6f}  r2={r2:.4f}")
-            break
+            print("weights:", [round(w, 6) for w in model.weights])
+            print("bias:", round(model.bias, 6))
         if epochs_without_improvement >= patience:
             print(
-                f"Stabilized at epoch {epoch}. "
-                f"best_mae={best_mae:.6f} "
-                f"(best epoch={best_epoch})"
+                f"stabilized epoch={epoch}  "
+                f"best_mae={best_mae:.6f}  "
+                f"best_epoch={best_epoch}"
             )
             break
+
+def print_node_analysis(model, samples, fingerprints):
+    print()
+    print("node analysis")
+    print()
+    for node, (_features, target) in enumerate(samples):
+        pred = model.predict(samples[node][0])
+        fp = fingerprints[node]
+        print(
+            f"node={node:3d}  "
+            f"target={target:.6f}  "
+            f"pred={pred:.6f}  "
+            f"err={abs(pred - target):.6f}  "
+            f"utility_var={fp['utility_variance']:.6f}  "
+            f"coverage={fp['mean_coverage']:.6f}  "
+            f"redundancy={fp['mean_redundancy']:.6f}"
+        )
+

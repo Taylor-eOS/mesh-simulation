@@ -1,29 +1,42 @@
 import random
-from oracle import load_nodes, build_adjacency
-from ml import RelayUtilityModel, build_training_data, train, FEATURE_DIM
+from oracle import build_adjacency, load_nodes
+from ml import FEATURE_DIM, RelayFingerprintModel, build_training_data, print_node_analysis, train
 from utils import save_pickle
 
-def print_sample_stats(samples):
-    utilities = [t for _f, t in samples]
+def print_fingerprint_stats(fingerprints):
+    utilities = [fp["mean_utility"] for fp in fingerprints.values()]
+    coverages = [fp["mean_coverage"] for fp in fingerprints.values()]
+    redundancies = [fp["mean_redundancy"] for fp in fingerprints.values()]
     mean_u = sum(utilities) / len(utilities)
     min_u = min(utilities)
     max_u = max(utilities)
-    n_neg = sum(1 for u in utilities if u < 0)
+    mean_cov = sum(coverages) / len(coverages)
+    mean_red = sum(redundancies) / len(redundancies)
+    n_negative = sum(1 for u in utilities if u < 0.0)
+    print("fingerprint statistics")
     print(
-        f"samples={len(samples)}  "
-        f"utility  min={min_u:.4f}  max={max_u:.4f}  mean={mean_u:.4f}  "
-        f"negative={n_neg}/{len(utilities)}"
+        f"nodes={len(fingerprints)}  "
+        f"utility_min={min_u:.6f}  "
+        f"utility_max={max_u:.6f}  "
+        f"utility_mean={mean_u:.6f}"
     )
+    print(
+        f"coverage_mean={mean_cov:.6f}  redundancy_mean={mean_red:.6f}")
+    print(f"negative_utility_nodes={n_negative}/{len(fingerprints)}")
 
 def main():
     random.seed(42)
     nodes, walls = load_nodes("points.txt")
     adj, radj = build_adjacency(nodes, walls)
-    samples = build_training_data(nodes, adj, radj)
-    print_sample_stats(samples)
-    model = RelayUtilityModel(FEATURE_DIM)
+    samples, fingerprints = build_training_data(nodes, adj, radj,)
+    print_fingerprint_stats(fingerprints)
+    model = RelayFingerprintModel(FEATURE_DIM)
     train(model, samples)
-    save_pickle("relay_model.pkl", {"model": model})
+    print_node_analysis(model,
+        samples,
+        fingerprints,)
+    save_pickle("relay_model.pkl", { "weights": model.weights, "bias": model.bias, "fingerprints": fingerprints,})
 
 if __name__ == "__main__":
     main()
+

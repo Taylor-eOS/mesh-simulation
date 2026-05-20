@@ -83,64 +83,70 @@ def propagation_quality(source, relay_set, adj, radj, n, p_reach=None):
         - CONGESTION_PENALTY * congestion
     )
 
-def bfs_hops(source, adj, n):
-    hops = [-1] * n
-    hops[source] = 0
-    queue = [source]
-    head = 0
-    while head < len(queue):
-        u = queue[head]
-        head += 1
-        for v, _sig in adj[u]:
-            if hops[v] == -1:
-                hops[v] = hops[u] + 1
-                queue.append(v)
-    return hops
-
-def oracle_marginal_utility(node, source, relay_set, adj, radj, n, p_full=None):
-    q_full = propagation_quality(source, relay_set, adj, radj, n, p_full)
-    p_reduced = simulate_propagation(source, relay_set - {node}, adj, radj, n)
-    q_reduced = propagation_quality(source, relay_set - {node}, adj, radj, n, p_reduced)
-    return q_full - q_reduced
-
-def extract_local_features(node, source, relay_set, adj, radj, n, p_reach=None, hops=None):
-    if p_reach is None:
-        p_reach = simulate_propagation(source, relay_set, adj, radj, n)
-    if hops is None:
-        hops = bfs_hops(source, adj, n)
-    relay_set_with_source = relay_set | {source}
-    incoming = [
-        (sig, p_reach[j])
-        for j, sig in radj[node]
-        if j in relay_set_with_source
-    ]
-    expected_rx_count = sum(reception_prob(sig) * pj for sig, pj in incoming)
-    best_signal = max((sig for sig, _pj in incoming), default=-130.0)
-    mean_signal = (
-        sum(sig for sig, _pj in incoming) / len(incoming)
-        if incoming else -130.0
-    )
-    return {
-        "expected_rx_count": expected_rx_count,
-        "best_signal": best_signal,
-        "mean_signal": mean_signal,
-        "neighbor_count": len(adj[node]),
-        "hop_count": hops[node] if hops[node] >= 0 else -1,
-        "node_p_reach": p_reach[node],
-    }
-
-def generate_training_sample(node, source, nodes, adj, radj):
+def compute_node_fingerprints(nodes, adj, radj):
     n = len(nodes)
-    relay_set = set(range(n)) - {source}
-    p_full = simulate_propagation(source, relay_set, adj, radj, n)
-    hops = bfs_hops(source, adj, n)
-    features = extract_local_features(node, source, relay_set, adj, radj, n, p_full, hops)
-    utility = oracle_marginal_utility(node, source, relay_set, adj, radj, n, p_full)
-    return features, utility
+    utility_sum = [0.0] * n
+    utility_sq_sum = [0.0] * n
+    coverage_sum = [0.0] * n
+    redundancy_sum = [0.0] * n
+    participation_count = [0] * n
+    for source in range(n):
+        relay_set = set(range(n)) - {source}
+        p_full = simulate_propagation(source, relay_set, adj, radj, n)
+        q_full = propagation_quality(source, relay_set, adj, radj, n, p_full)
+        for node in relay_set:
+            reduced_relay_set = relay_set - {node}
+            p_reduced = simulate_propagation(source, reduced_relay_set, adj, radj, n)
+            q_reduced = propagation_quality(source, reduced_relay_set, adj, radj, n, p_reduced)
+            utility = q_full - q_reduced
+            utility_sum[node] += utility
+            utility_sq_sum[node] += utility * utility
+            coverage_sum[node] += p_full[node]
+            expected_rx = sum(
+                reception_prob(sig) * p_full[j]
+                for j, sig in radj[node]
+                if j in relay_set | {source}
+            )
+            redundancy_sum[node] += max(0.0, expected_rx - p_full[node])
+            participation_count[node] += 1
+    fingerprints = {}
+    for node in range(n):
+        count = max(participation_count[node], 1)
+        mean_utility = utility_sum[node] / count
+        mean_utility_sq = utility_sq_sum[node] / count
+        utility_variance = max(0.0, mean_utility_sq - mean_utility * mean_utility)
+        fingerprints[node] = {
+            "mean_utility": mean_utility,
+            "utility_variance": utility_variance,
+            "mean_coverage": coverage_sum[node] / count,
+            "mean_redundancy": redundancy_sum[node] / count,
+            "degree": len(adj[node]),
+            "weighted_in_degree": sum(reception_prob(sig) for _j, sig in radj[node]),
+            "mean_out_signal": (
+                sum(sig for _j, sig in adj[node]) / len(adj[node])
+                if adj[node] else -130.0
+            ),
+            "mean_in_signal": (
+                sum(sig for _j, sig in radj[node]) / len(radj[node])
+                if radj[node] else -130.0
+            ),
+        }
+    return fingerprints
 
-def oracle_label(node, source, nodes, adj, radj):
-    _features, utility = generate_training_sample(node, source, nodes, adj, radj)
-    return utility
+def extract_structural_features(node, adj, radj):
+    out_sigs = [sig for _j, sig in adj[node]]
+    in_sigs = [sig for _j, sig in radj[node]]
+    neighbor_degrees = [len(adj[j]) for j, _sig in adj[node]]
+    return {
+        "degree": len(out_sigs),
+        "mean_out_signal": sum(out_sigs) / len(out_sigs) if out_sigs else -130.0,
+        "mean_in_signal": sum(in_sigs) / len(in_sigs) if in_sigs else -130.0,
+        "neighbor_mean_degree": (
+            sum(neighbor_degrees) / len(neighbor_degrees)
+            if neighbor_degrees else 0.0
+        ),
+        "weighted_in_degree": sum(reception_prob(sig) for sig in in_sigs),
+    }
 
 def load_nodes(path):
     nodes = []
@@ -165,3 +171,4 @@ def load_nodes(path):
                     (int(x2.strip()), int(y2.strip()))
                 ))
     return nodes, walls
+
