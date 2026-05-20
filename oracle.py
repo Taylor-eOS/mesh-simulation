@@ -1,10 +1,9 @@
-import math
 from utils import euclidean, normalize_signal, segment_intersection
 
-PRESSURE_ITERATIONS = 30
-PRESSURE_DECAY = 0.92
-PRESSURE_GAIN = 0.18
-PRESSURE_COST = 4.0
+PROPAGATION_ITERATIONS = 25
+COVERAGE_WEIGHT = 1.0
+REDUNDANCY_PENALTY = 0.4
+CONGESTION_PENALTY = 0.15
 MAX_RANGE = 500.0
 
 def nodes_connected(i, j, nodes, walls):
@@ -17,11 +16,16 @@ def signal_strength(i, j, nodes):
     d = euclidean(nodes[i], nodes[j])
     if d >= MAX_RANGE:
         return None
-    return -130 + (1.0 - d / MAX_RANGE) * 100.0
+    return -130.0 + (1.0 - d / MAX_RANGE) * 100.0
+
+def reception_prob(sig):
+    norm = normalize_signal(sig)
+    return norm ** 2
 
 def build_adjacency(nodes, walls):
     n = len(nodes)
     adj = {i: [] for i in range(n)}
+    radj = {i: [] for i in range(n)}
     for i in range(n):
         for j in range(n):
             if i == j:
@@ -32,102 +36,111 @@ def build_adjacency(nodes, walls):
             if sig is None:
                 continue
             adj[i].append((j, sig))
-    return adj
+            radj[j].append((i, sig))
+    return adj, radj
 
-def link_cost(sig):
-    norm = normalize_signal(sig)
-    return 1.0 / (norm ** 3)
-
-def pressure_weight(pressure):
-    return 1.0 + PRESSURE_COST * pressure
-
-def shortest_path(source, dest, adj, pressure):
-    n = len(adj)
-    dist = [float("inf")] * n
-    pred = [-1] * n
-    used = [False] * n
-    dist[source] = 0.0
-    for _ in range(n):
-        u = -1
-        best = float("inf")
+def simulate_propagation(source, relay_set, adj, radj, n):
+    relay_set_with_source = relay_set | {source}
+    p_reach = [0.0] * n
+    p_reach[source] = 1.0
+    for _ in range(PROPAGATION_ITERATIONS):
+        new_p = list(p_reach)
         for i in range(n):
-            if not used[i] and dist[i] < best:
-                best = dist[i]
-                u = i
-        if u == -1:
+            if i == source:
+                continue
+            p_not_rx = 1.0
+            for j, sig in radj[i]:
+                if j not in relay_set_with_source:
+                    continue
+                p_not_rx *= (1.0 - reception_prob(sig) * p_reach[j])
+            new_p[i] = 1.0 - p_not_rx
+        delta = max(abs(new_p[i] - p_reach[i]) for i in range(n))
+        p_reach = new_p
+        if delta < 1e-6:
             break
-        if u == dest:
-            break
-        used[u] = True
-        for v, sig in adj[u]:
-            base = link_cost(sig)
-            congestion = pressure_weight(pressure[v])
-            nd = dist[u] + base * congestion
-            if nd < dist[v]:
-                dist[v] = nd
-                pred[v] = u
-    if dist[dest] == float("inf"):
-        return None
-    path = []
-    cur = dest
-    while cur != -1:
-        path.append(cur)
-        cur = pred[cur]
-    path.reverse()
-    return path
+    return p_reach
 
-def dijkstra(origin, adj, pressure):
-    n = len(adj)
-    paths = {}
-    for dest in range(n):
-        if dest == origin:
-            continue
-        path = shortest_path(origin, dest, adj, pressure)
-        if path is not None:
-            paths[dest] = path
-    return paths
-
-def compute_pressure(adj):
-    n = len(adj)
-    pressure = [0.0 for _ in range(n)]
-    for _ in range(PRESSURE_ITERATIONS):
-        traffic = [0.0 for _ in range(n)]
-        for source in range(n):
-            for dest in range(n):
-                if source == dest:
-                    continue
-                path = shortest_path(source, dest, adj, pressure)
-                if path is None:
-                    continue
-                if len(path) <= 2:
-                    continue
-                for hop_index, node in enumerate(path[1:-1], start=1):
-                    remaining = len(path) - hop_index
-                    load = 1.0 + remaining * 0.25
-                    traffic[node] += load
-        peak = max(max(traffic), 1e-9)
-        next_pressure = [0.0 for _ in range(n)]
-        for i in range(n):
-            normalized = traffic[i] / peak
-            next_pressure[i] = pressure[i] * PRESSURE_DECAY + normalized * PRESSURE_GAIN
-        pressure = next_pressure
-    peak = max(max(pressure), 1e-9)
+def propagation_quality(source, relay_set, adj, radj, n, p_reach=None):
+    if p_reach is None:
+        p_reach = simulate_propagation(source, relay_set, adj, radj, n)
+    relay_set_with_source = relay_set | {source}
+    coverage = sum(p_reach[i] for i in range(n) if i != source) / max(n - 1, 1)
+    total_redundancy = 0.0
     for i in range(n):
-        pressure[i] /= peak
-    return pressure
+        if i == source:
+            continue
+        expected_rx = sum(
+            reception_prob(sig) * p_reach[j]
+            for j, sig in radj[i]
+            if j in relay_set_with_source
+        )
+        total_redundancy += max(0.0, expected_rx - p_reach[i])
+    redundancy = total_redundancy / max(n - 1, 1)
+    congestion = sum(p_reach[j] for j in relay_set) / max(n - 1, 1)
+    return (
+        COVERAGE_WEIGHT * coverage
+        - REDUNDANCY_PENALTY * redundancy
+        - CONGESTION_PENALTY * congestion
+    )
 
-def estimate_relay_utility(current, neighbor, dest, nodes, pressure, sig):
-    current_distance = euclidean(nodes[current], nodes[dest])
-    neighbor_distance = euclidean(nodes[neighbor], nodes[dest])
-    progress_gain = (current_distance - neighbor_distance) / MAX_RANGE
-    signal_quality = normalize_signal(sig)
-    congestion_penalty = pressure[neighbor]
-    utility = (progress_gain * 0.50 + signal_quality * 0.35 - congestion_penalty * 0.40)
+def bfs_hops(source, adj, n):
+    hops = [-1] * n
+    hops[source] = 0
+    queue = [source]
+    head = 0
+    while head < len(queue):
+        u = queue[head]
+        head += 1
+        for v, _sig in adj[u]:
+            if hops[v] == -1:
+                hops[v] = hops[u] + 1
+                queue.append(v)
+    return hops
+
+def oracle_marginal_utility(node, source, relay_set, adj, radj, n, p_full=None):
+    q_full = propagation_quality(source, relay_set, adj, radj, n, p_full)
+    p_reduced = simulate_propagation(source, relay_set - {node}, adj, radj, n)
+    q_reduced = propagation_quality(source, relay_set - {node}, adj, radj, n, p_reduced)
+    return q_full - q_reduced
+
+def extract_local_features(node, source, relay_set, adj, radj, n, p_reach=None, hops=None):
+    if p_reach is None:
+        p_reach = simulate_propagation(source, relay_set, adj, radj, n)
+    if hops is None:
+        hops = bfs_hops(source, adj, n)
+    relay_set_with_source = relay_set | {source}
+    incoming = [
+        (sig, p_reach[j])
+        for j, sig in radj[node]
+        if j in relay_set_with_source
+    ]
+    expected_rx_count = sum(reception_prob(sig) * pj for sig, pj in incoming)
+    best_signal = max((sig for sig, _pj in incoming), default=-130.0)
+    mean_signal = (
+        sum(sig for sig, _pj in incoming) / len(incoming)
+        if incoming else -130.0
+    )
+    return {
+        "expected_rx_count": expected_rx_count,
+        "best_signal": best_signal,
+        "mean_signal": mean_signal,
+        "neighbor_count": len(adj[node]),
+        "hop_count": hops[node] if hops[node] >= 0 else -1,
+        "node_p_reach": p_reach[node],
+    }
+
+def generate_training_sample(node, source, nodes, adj, radj):
+    n = len(nodes)
+    relay_set = set(range(n)) - {source}
+    p_full = simulate_propagation(source, relay_set, adj, radj, n)
+    hops = bfs_hops(source, adj, n)
+    features = extract_local_features(node, source, relay_set, adj, radj, n, p_full, hops)
+    utility = oracle_marginal_utility(node, source, relay_set, adj, radj, n, p_full)
+    return features, utility
+
+def oracle_label(node, source, nodes, adj, radj):
+    _features, utility = generate_training_sample(node, source, nodes, adj, radj)
     return utility
-
-def oracle_label(current, neighbor, dest, nodes, pressure, sig):
-    utility = estimate_relay_utility(current, neighbor, dest, nodes, pressure, sig)
-    return max(0.0, min(1.0, utility + 0.5))
 
 def load_nodes(path):
     nodes = []
@@ -152,4 +165,3 @@ def load_nodes(path):
                     (int(x2.strip()), int(y2.strip()))
                 ))
     return nodes, walls
-

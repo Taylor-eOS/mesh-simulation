@@ -1,34 +1,29 @@
 import random
-from oracle import load_nodes, build_adjacency, compute_pressure, oracle_label
-from ml import RelayUtilityModel, build_training_data, train
+from oracle import load_nodes, build_adjacency
+from ml import RelayUtilityModel, build_training_data, train, FEATURE_DIM
 from utils import save_pickle
 
-def print_pressure(pressure):
-    for i, p in enumerate(pressure):
-        print(f"Node {i} pressure={p:.3f}")
+def print_sample_stats(samples):
+    utilities = [t for _f, t in samples]
+    mean_u = sum(utilities) / len(utilities)
+    min_u = min(utilities)
+    max_u = max(utilities)
+    n_neg = sum(1 for u in utilities if u < 0)
+    print(
+        f"samples={len(samples)}  "
+        f"utility  min={min_u:.4f}  max={max_u:.4f}  mean={mean_u:.4f}  "
+        f"negative={n_neg}/{len(utilities)}"
+    )
 
 def main():
     random.seed(42)
     nodes, walls = load_nodes("points.txt")
-    adj = build_adjacency(nodes, walls)
-    pressure = compute_pressure(adj)
-    print_pressure(pressure)
-    samples = build_training_data(
-        adj=adj,
-        nodes=nodes,
-        pressure=pressure,
-        oracle_label_fn=oracle_label,
-    )
-    print(f"samples={len(samples)}")
-    model = RelayUtilityModel(
-        feature_dim=len(samples[0][0])
-    )
+    adj, radj = build_adjacency(nodes, walls)
+    samples = build_training_data(nodes, adj, radj)
+    print_sample_stats(samples)
+    model = RelayUtilityModel(FEATURE_DIM)
     train(model, samples)
-    save_pickle("relay_model.pkl", {
-        "model": model,
-        "pressure": pressure,
-    })
+    save_pickle("relay_model.pkl", {"model": model})
 
 if __name__ == "__main__":
     main()
-

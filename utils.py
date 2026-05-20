@@ -1,9 +1,6 @@
 import math
 import pickle
 
-def clamp(x, lo, hi):
-    return max(lo, min(hi, x))
-
 def normalize_signal(sig):
     return (sig + 130.0) / 100.0
 
