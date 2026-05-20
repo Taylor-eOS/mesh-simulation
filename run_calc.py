@@ -1,6 +1,6 @@
 import tkinter as tk
 import math
-from utils import ccw, segment_intersection
+from utils import segment_intersection
 
 WIDTH, HEIGHT = 700, 500
 NODE_RADIUS = 12

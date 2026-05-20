@@ -1,14 +1,42 @@
 import math
+import pickle
 
-def ccw(A, B, C):
-    return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
 
-def segment_intersection(p1, p2, p3, p4):
-    return (ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4))
+def normalize_signal(sig):
+    return (sig + 130.0) / 100.0
 
-def dot(a, b):
-    return sum(x * y for x, y in zip(a, b))
+def euclidean(a, b):
+    return math.hypot(b[0] - a[0], b[1] - a[1])
 
-def sigmoid(x):
-    x = max(-40, min(40, x))
-    return 1.0 / (1.0 + math.exp(-x))
+def save_pickle(path, obj):
+    with open(path, "wb") as f:
+        pickle.dump(obj, f)
+
+def load_pickle(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+def segment_intersection(a, b, c, d):
+    def orient(p, q, r):
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    def on_segment(p, q, r):
+        return (min(p[0], r[0]) <= q[0] <= max(p[0], r[0]) and min(p[1], r[1]) <= q[1] <= max(p[1], r[1]))
+    o1 = orient(a, b, c)
+    o2 = orient(a, b, d)
+    o3 = orient(c, d, a)
+    o4 = orient(c, d, b)
+    if o1 * o2 < 0 and o3 * o4 < 0:
+        return True
+    if o1 == 0 and on_segment(a, c, b):
+        return True
+    if o2 == 0 and on_segment(a, d, b):
+        return True
+    if o3 == 0 and on_segment(c, a, d):
+        return True
+    if o4 == 0 and on_segment(c, b, d):
+        return True
+    return False
+

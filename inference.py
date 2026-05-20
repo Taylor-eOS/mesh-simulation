@@ -1,8 +1,10 @@
 import math
 import pickle
 import tkinter as tk
-WIDTH = 1200
-HEIGHT = 950
+from ml import extract_observation, observation_to_vector
+
+WIDTH = 900
+HEIGHT = 900
 NODE_RADIUS = 14
 MAX_DISTANCE = 500.0
 MODEL_PATH = "policy_model.pkl"
@@ -84,29 +86,24 @@ def load_model(path):
     return data["model"], data["pressure"]
 
 def evaluate_neighbors(model, pressure, adj, nodes, current, dest):
-    current_distance = math.hypot(
-        nodes[dest][0] - nodes[current][0], nodes[dest][1] - nodes[current][1]
-    )
     results = []
     for neighbor, sig in adj[current]:
-        next_distance = math.hypot(
-            nodes[dest][0] - nodes[neighbor][0],
-            nodes[dest][1] - nodes[neighbor][1],
+        observation = extract_observation(
+            current=current,
+            neighbor=neighbor,
+            dest=dest,
+            nodes=nodes,
+            pressure=pressure,
+            sig=sig,
+            adj=adj,
         )
-        progress = (current_distance - next_distance) / MAX_DISTANCE
-        signal = (sig + 130.0) / 100.0
-        congestion = pressure[neighbor]
-        features = [progress, signal, congestion]
+        features = observation_to_vector(observation)
         score = model.predict(features)
-        results.append(
-            {
-                "neighbor": neighbor,
-                "score": score,
-                "progress": progress,
-                "signal": signal,
-                "congestion": congestion,
-            }
-        )
+        results.append({
+            "neighbor": neighbor,
+            "score": score,
+            "observation": observation,
+        })
     results.sort(key=lambda x: x["score"], reverse=True)
     return results
 
@@ -171,12 +168,7 @@ def draw_walls(canvas, walls):
 
 def draw_nodes(canvas, nodes, pressure, route, decisions):
     route_set = set(route or [])
-    decision_map = {}
-    if decisions:
-        for d in decisions:
-            current = d["current"]
-            if d["selected"] is not None:
-                decision_map[current] = d["selected"]
+    decision_map = {d["current"]: d["selected"] for d in (decisions or []) if d["selected"] is not None}
     for idx, (x, y) in enumerate(nodes):
         p = pressure[idx]
         shade = int(255 - p * 180)
@@ -185,45 +177,25 @@ def draw_nodes(canvas, nodes, pressure, route, decisions):
         outline = "black"
         width = 2
         if idx == selected_origin:
-            color = "#00cc44"
-            text = "white"
+            color, text = "#00cc44", "white"
         elif idx == selected_destination:
-            color = "#ff2244"
-            text = "white"
+            color, text = "#ff2244", "white"
         elif idx in route_set:
-            color = "#ff8800"
-            text = "white"
+            color, text = "#ff8800", "white"
         if idx == hovered_node:
-            outline = "#00ffff"
-            width = 4
-        canvas.create_oval(
-            x - NODE_RADIUS,
-            y - NODE_RADIUS,
-            x + NODE_RADIUS,
-            y + NODE_RADIUS,
-            fill=color,
-            outline=outline,
-            width=width,
-        )
-        canvas.create_text(
-            x, y, text=str(idx), fill=text, font=("Arial", 9, "bold")
-        )
+            outline, width = "#00ffff", 4
+        canvas.create_oval(x - NODE_RADIUS, y - NODE_RADIUS, x + NODE_RADIUS, y + NODE_RADIUS, fill=color, outline=outline, width=width)
+        canvas.create_text(x, y, text=str(idx), fill=text, font=("Arial", 9, "bold"))
         if idx in decision_map:
             target = decision_map[idx]
             tx, ty = nodes[target]
-            dx = tx - x
-            dy = ty - y
+            dx, dy = tx - x, ty - y
             length = math.hypot(dx, dy)
             if length > 0:
-                dx /= length
-                dy /= length
-                ax = x + dx * 24
-                ay = y + dy * 24
-                bx = tx - dx * 24
-                by = ty - dy * 24
-                canvas.create_line(
-                    ax, ay, bx, by, fill="#ff0000", width=3, arrow=tk.LAST
-                )
+                dx, dy = dx / length, dy / length
+                ax, ay = x + dx * 24, y + dy * 24
+                bx, by = tx - dx * 24, ty - dy * 24
+                canvas.create_line(ax, ay, bx, by, fill="#ff0000", width=3, arrow=tk.LAST)
 
 def draw_route_text(canvas, route, success):
     if not route:
@@ -233,42 +205,20 @@ def draw_route_text(canvas, route, success):
         text += "    SUCCESS"
     else:
         text += "    FAILED"
-    canvas.create_text(
-        20, 20, anchor="w", text=text, font=("Arial", 14, "bold")
-    )
+    canvas.create_text(20, 20, anchor="w", text=text, font=("Arial", 14, "bold"))
 
 def draw_node_analysis(canvas, nodes, pressure, adj, model):
-    if hovered_node is None:
+    if hovered_node is None or selected_destination is None:
         return
-    if selected_destination is None:
-        return
-    evaluations = evaluate_neighbors(
-        model, pressure, adj, nodes, hovered_node, selected_destination
-    )
-    x = 20
-    y = HEIGHT - 320
-    canvas.create_rectangle(
-        x, y, x + 1120, y + 280, fill="white", outline="#cccccc", width=2
-    )
-    title = (
-        f"Node {hovered_node} local policy "
-        f"(destination={selected_destination})"
-    )
-    canvas.create_text(
-        x + 10, y + 16, anchor="w", text=title, font=("Arial", 13, "bold")
-    )
+    evaluations = evaluate_neighbors(model, pressure, adj, nodes, hovered_node, selected_destination)
+    x, y = 20, HEIGHT - 340
+    canvas.create_rectangle(x, y, x + 1280, y + 300, fill="white", outline="#cccccc", width=2)
+    canvas.create_text(x + 10, y + 16, anchor="w", text=f"Node {hovered_node} relay utility estimates (destination={selected_destination})", font=("Arial", 13, "bold"))
     py = y + 42
     for item in evaluations[:12]:
-        line = (
-            f"neighbor={item['neighbor']:3d}   "
-            f"score={item['score']:.4f}   "
-            f"progress={item['progress']:+.3f}   "
-            f"signal={item['signal']:.3f}   "
-            f"pressure={item['congestion']:.3f}"
-        )
-        canvas.create_text(
-            x + 10, py, anchor="w", text=line, font=("Courier", 10)
-        )
+        obs = item["observation"]
+        line = f"neighbor={item['neighbor']:3d}   utility={item['score']:.4f}   progress={obs['progress']:+.3f}   signal={obs['signal']:.3f}   congestion={obs['congestion']:.3f}   density={obs['neighbor_density']:.3f}"
+        canvas.create_text(x + 10, py, anchor="w", text=line, font=("Courier", 10))
         py += 20
 
 def redraw(canvas, nodes, walls, adj, model, pressure):
