@@ -8,6 +8,12 @@ HIT_RADIUS = 5
 def snap(x, y):
     return round(x / GRID) * GRID, round(y / GRID) * GRID
 
+def ccw(a, b, c):
+    return (c[1] - a[1]) * (b[0] - a[0]) > (b[1] - a[1]) * (c[0] - a[0])
+
+def intersect(a, b, c, d):
+    return ccw(a, c, d) != ccw(b, c, d) and ccw(a, b, c) != ccw(a, b, d)
+
 def draw_point(canvas, x, y, index):
     r = 4
     canvas.create_oval(x - r, y - r, x + r, y + r, fill="#e74c3c", outline="#c0392b", width=1)
@@ -22,6 +28,11 @@ def draw_line(canvas, x1, y1, x2, y2):
 def redraw(canvas, points, lines):
     canvas.delete("all")
     draw_grid(canvas)
+    for i in range(len(points)):
+        for j in range(i + 1, len(points)):
+            p1, p2 = points[i], points[j]
+            if not any(intersect(p1, p2, w[0], w[1]) for w in lines):
+                canvas.create_line(p1[0], p1[1], p2[0], p2[1], fill="#a9dfbf", dash=(4, 4))
     for i, (x, y) in enumerate(points):
         draw_point(canvas, x, y, i)
     for (x1, y1), (x2, y2) in lines:
@@ -64,7 +75,7 @@ def record_point(event, canvas, points, lines, space_held):
         return
     points.append((x, y))
     write_file(points, lines)
-    draw_point(canvas, x, y, len(points) - 1)
+    redraw(canvas, points, lines)
 
 def record_line(event, canvas, points, lines, line_start, space_held):
     x, y = event.x, event.y
@@ -96,6 +107,18 @@ def on_undo(event, canvas, points, lines, line_start):
         return
     write_file(points, lines)
     redraw(canvas, points, lines)
+
+def on_motion(event, canvas, points, lines, motion_state):
+    if motion_state[0]:
+        return
+    motion_state[0] = True
+    canvas.after(50, lambda: motion_state.__setitem__(0, False))
+    canvas.delete("dynamic_vis")
+    m = (event.x, event.y)
+    for p in points:
+        if not any(intersect(p, m, w[0], w[1]) for w in lines):
+            canvas.create_line(p[0], p[1], m[0], m[1], fill="#f5b041", dash=(2, 2), tags="dynamic_vis")
+    canvas.tag_lower("dynamic_vis")
 
 def draw_grid(canvas):
     for x in range(0, WIDTH, 50):
@@ -135,14 +158,16 @@ def main():
     points, lines = load_file()
     space_held = [False]
     line_start = [None]
+    motion_state = [False]
     root = tk.Tk()
-    root.title("Point Recorder — LMB: point/remove, RMB: line (2 clicks)/remove, Ctrl+Z: undo, Space: snap")
+    root.title("Point Recorder, LMB: point/remove, RMB: line (2 clicks)/remove, Ctrl+Z: undo, Space: snap")
     root.resizable(False, False)
     canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg="white", highlightthickness=0)
     canvas.pack()
     redraw(canvas, points, lines)
     canvas.bind("<Button-1>", lambda e: record_point(e, canvas, points, lines, space_held))
     canvas.bind("<Button-3>", lambda e: record_line(e, canvas, points, lines, line_start, space_held))
+    canvas.bind("<Motion>", lambda e: on_motion(e, canvas, points, lines, motion_state))
     root.bind("<Control-z>", lambda e: on_undo(e, canvas, points, lines, line_start))
     root.bind("<KeyPress-space>", lambda e: space_held.__setitem__(0, True))
     root.bind("<KeyRelease-space>", lambda e: space_held.__setitem__(0, False))
