@@ -4,11 +4,11 @@ from propagation import propagation_loss, node_redundancy, auto_redundancy_penal
 
 FEATURE_DIM = 5
 HIDDEN_DIM = 16
-MAX_EPOCHS = 10000
+MAX_EPOCHS = 15000
 LR = 0.01
-LOG_INTERVAL = 50
+LOG_INTERVAL = 100
 PATIENCE = 100
-MIN_DELTA = 1e-5
+MIN_DELTA = 1e-4
 
 class RelayPolicy(nn.Module):
     def __init__(self, feature_dim=FEATURE_DIM, hidden_dim=HIDDEN_DIM):
@@ -64,18 +64,10 @@ def evaluate(model, features, link, n, redundancy_penalty):
     airtime = relay_probs.mean().item()
     print(f"\nfinal  coverage={coverage:.4f}  redundancy={redundancy:.4f}  airtime={airtime:.4f}  loss={loss:.4f}")
     print("\nper-node analysis:")
-    print(f"  {'node':>4}  {'utility':>9}  {'redundancy':>10}  {'coverage':>10}  note")
+    print(f"  {'node':>4}  {'utility':>9}  {'redundancy':>10}  {'coverage':>10}")
     for i, score in enumerate(scores.tolist()):
         p = relay_probs[i].item()
         red = per_node_redundancy[i].item()
         cov = per_node_coverage[i].item()
-        if score > 2.0:
-            note = "clear relay"
-        elif score > 0.0:
-            note = "marginal relay"
-        elif score > -2.0:
-            note = "marginal suppress"
-        else:
-            note = "clear suppress"
-        print(f"  {i:>4}  {score:>9.4f}  {red:>10.4f}  {cov:>10.4f}  {note}")
+        print(f"  {i:>4}  {score:>9.4f}  {red:>10.4f}  {cov:>10.4f}")
     return scores

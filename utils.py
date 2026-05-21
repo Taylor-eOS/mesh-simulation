@@ -4,14 +4,6 @@ import pickle
 def euclidean(a, b):
     return math.hypot(b[0] - a[0], b[1] - a[1])
 
-def save_pickle(path, obj):
-    with open(path, "wb") as f:
-        pickle.dump(obj, f)
-
-def load_pickle(path):
-    with open(path, "rb") as f:
-        return pickle.load(f)
-
 def segment_intersection(a, b, c, d):
     def orient(p, q, r):
         return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
