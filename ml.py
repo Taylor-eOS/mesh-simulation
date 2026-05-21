@@ -1,6 +1,6 @@
 import math
 import random
-from oracle import compute_node_fingerprints, extract_structural_features
+from ground import compute_node_fingerprints, extract_structural_features
 
 MAX_EPOCHS = 10000
 EPOCH_INTERVAL = 10

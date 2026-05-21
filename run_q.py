@@ -1,5 +1,5 @@
 import random
-from oracle import build_adjacency, load_nodes
+from ground import build_adjacency, load_nodes
 from ml import FEATURE_DIM, RelayFingerprintModel, build_training_data, print_node_analysis, train
 from utils import save_pickle
 
