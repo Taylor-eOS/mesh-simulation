@@ -3,13 +3,6 @@ import torch
 PROPAGATION_ITERATIONS = 25
 
 def soft_propagate_all(relay_probs, link, n):
-    """
-    Propagate from all source nodes simultaneously.
-    Returns p_reach: (n_sources, n) where p_reach[s, i] is the probability
-    node i receives a packet originating at source s.
-    relay_probs: (n,) in [0,1]
-    link[i,j]: probability a single transmission from j reaches i
-    """
     source_relay = relay_probs.unsqueeze(0).expand(n, n).clone()
     source_relay[torch.arange(n), torch.arange(n)] = 1.0
     p_reach = torch.zeros(n, n)

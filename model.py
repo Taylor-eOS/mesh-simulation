@@ -6,11 +6,9 @@ FEATURE_DIM = 5
 HIDDEN_DIM = 16
 MAX_EPOCHS = 10000
 LR = 0.01
-LOG_INTERVAL = 100
-PATIENCE = 150
+LOG_INTERVAL = 50
+PATIENCE = 100
 MIN_DELTA = 1e-5
-RELAY_THRESHOLD = 0.5
-
 
 class RelayPolicy(nn.Module):
     def __init__(self, feature_dim=FEATURE_DIM, hidden_dim=HIDDEN_DIM):
@@ -19,12 +17,10 @@ class RelayPolicy(nn.Module):
             nn.Linear(feature_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
-            nn.Sigmoid(),
         )
 
     def forward(self, features):
-        return self.net(features).squeeze(-1)
-
+        return torch.sigmoid(self.net(features).squeeze(-1))
 
 def train(features, link, n):
     redundancy_penalty = auto_redundancy_penalty(link)
@@ -55,26 +51,31 @@ def train(features, link, n):
             break
     return model, redundancy_penalty
 
+def relay_utility_scores(model, features):
+    with torch.no_grad():
+        return model.net(features).squeeze(-1)
 
 def evaluate(model, features, link, n, redundancy_penalty):
     with torch.no_grad():
         relay_probs = model(features)
         loss, coverage, redundancy = propagation_loss(relay_probs, link, n, redundancy_penalty)
         per_node_redundancy, per_node_coverage = node_redundancy(relay_probs, link, n)
+        scores = relay_utility_scores(model, features)
     airtime = relay_probs.mean().item()
     print(f"\nfinal  coverage={coverage:.4f}  redundancy={redundancy:.4f}  airtime={airtime:.4f}  loss={loss:.4f}")
-    relay_nodes = [i for i, p in enumerate(relay_probs.tolist()) if p >= RELAY_THRESHOLD]
-    suppress_nodes = [i for i, p in enumerate(relay_probs.tolist()) if p < RELAY_THRESHOLD]
-    print(f"\nrelay backbone (threshold={RELAY_THRESHOLD}):")
-    print(f"  relay    ({len(relay_nodes):2d} nodes): {relay_nodes}")
-    print(f"  suppress ({len(suppress_nodes):2d} nodes): {suppress_nodes}")
     print("\nper-node analysis:")
-    print(f"  {'node':>4}  {'relay_prob':>10}  {'redundancy':>10}  {'coverage':>10}")
-    for i, p in enumerate(relay_probs.tolist()):
-        marker = " <--" if p >= RELAY_THRESHOLD else ""
-        print(
-            f"  {i:>4}  {p:>10.4f}  "
-            f"{per_node_redundancy[i].item():>10.4f}  "
-            f"{per_node_coverage[i].item():>10.4f}{marker}"
-        )
-    return relay_probs
+    print(f"  {'node':>4}  {'utility':>9}  {'redundancy':>10}  {'coverage':>10}  note")
+    for i, score in enumerate(scores.tolist()):
+        p = relay_probs[i].item()
+        red = per_node_redundancy[i].item()
+        cov = per_node_coverage[i].item()
+        if score > 2.0:
+            note = "clear relay"
+        elif score > 0.0:
+            note = "marginal relay"
+        elif score > -2.0:
+            note = "marginal suppress"
+        else:
+            note = "clear suppress"
+        print(f"  {i:>4}  {score:>9.4f}  {red:>10.4f}  {cov:>10.4f}  {note}")
+    return scores
