@@ -1,6 +1,5 @@
 import torch
-
-PROPAGATION_ITERATIONS = 25
+from settings import PROPAGATION_ITERATIONS
 
 def soft_propagate_all(relay_probs, link, n):
     source_relay = relay_probs.unsqueeze(0).expand(n, n).clone()

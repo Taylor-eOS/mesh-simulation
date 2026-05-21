@@ -1,7 +1,8 @@
 import tkinter as tk
+from settings import MAX_RANGE, OUTPUT_FILE
 
-WIDTH, HEIGHT = 700, 500
-OUTPUT_FILE = "points.txt"
+WIDTH = 700
+HEIGHT = 500
 GRID = 10
 HIT_RADIUS = 5
 
@@ -31,8 +32,9 @@ def redraw(canvas, points, lines):
     for i in range(len(points)):
         for j in range(i + 1, len(points)):
             p1, p2 = points[i], points[j]
-            if not any(intersect(p1, p2, w[0], w[1]) for w in lines):
-                canvas.create_line(p1[0], p1[1], p2[0], p2[1], fill="#a9dfbf", dash=(4, 4))
+            if (p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2 <= MAX_RANGE ** 2:
+                if not any(intersect(p1, p2, w[0], w[1]) for w in lines):
+                    canvas.create_line(p1[0], p1[1], p2[0], p2[1], fill="#a9dfbf", dash=(4, 4))
     for i, (x, y) in enumerate(points):
         draw_point(canvas, x, y, i)
     for (x1, y1), (x2, y2) in lines:
@@ -116,8 +118,9 @@ def on_motion(event, canvas, points, lines, motion_state):
     canvas.delete("dynamic_vis")
     m = (event.x, event.y)
     for p in points:
-        if not any(intersect(p, m, w[0], w[1]) for w in lines):
-            canvas.create_line(p[0], p[1], m[0], m[1], fill="#f5b041", dash=(2, 2), tags="dynamic_vis")
+        if (p[0] - m[0]) ** 2 + (p[1] - m[1]) ** 2 <= MAX_RANGE ** 2:
+            if not any(intersect(p, m, w[0], w[1]) for w in lines):
+                canvas.create_line(p[0], p[1], m[0], m[1], fill="#f5b041", dash=(2, 2), tags="dynamic_vis")
     canvas.tag_lower("dynamic_vis")
 
 def draw_grid(canvas):
@@ -173,6 +176,5 @@ def main():
     root.bind("<KeyRelease-space>", lambda e: space_held.__setitem__(0, False))
     root.bind("<Control-q>", lambda e: root.destroy())
     root.mainloop()
-
 if __name__ == "__main__":
     main()

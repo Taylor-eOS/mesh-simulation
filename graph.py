@@ -1,7 +1,6 @@
 import math
 import torch
-
-MAX_RANGE = 500.0
+from settings import MAX_RANGE
 
 def _euclidean(a, b):
     return math.hypot(b[0] - a[0], b[1] - a[1])

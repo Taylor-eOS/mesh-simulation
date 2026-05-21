@@ -1,9 +1,10 @@
 import pickle
 from graph import load_graph, structural_features
 from model import train, evaluate, relay_utility_scores
+from settings import OUTPUT_FILE
 
 def main():
-    link, n = load_graph("points.txt")
+    link, n = load_graph(OUTPUT_FILE)
     features = structural_features(link)
     print(f"nodes={n}  link_density={(link > 0).float().mean().item():.3f}")
     model, redundancy_penalty = train(features, link, n)
