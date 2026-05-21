@@ -1,5 +1,4 @@
 import pickle
-import torch
 from graph import load_graph, structural_features
 from model import train, evaluate
 
