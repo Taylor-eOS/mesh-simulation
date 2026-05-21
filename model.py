@@ -1,15 +1,14 @@
 import torch
 import torch.nn as nn
-from propagation import propagation_loss
+from propagation import propagation_loss, node_redundancy, auto_redundancy_penalty
 
 FEATURE_DIM = 5
 HIDDEN_DIM = 16
 MAX_EPOCHS = 10000
 LR = 0.01
-LOG_INTERVAL = 50
+LOG_INTERVAL = 100
 PATIENCE = 150
 MIN_DELTA = 1e-5
-N_SOURCES_PER_STEP = None
 RELAY_THRESHOLD = 0.5
 
 
@@ -28,6 +27,8 @@ class RelayPolicy(nn.Module):
 
 
 def train(features, link, n):
+    redundancy_penalty = auto_redundancy_penalty(link)
+    print(f"auto redundancy_penalty={redundancy_penalty:.4f}")
     model = RelayPolicy()
     opt = torch.optim.Adam(model.parameters(), lr=LR)
     best_loss = float("inf")
@@ -35,7 +36,7 @@ def train(features, link, n):
     for epoch in range(MAX_EPOCHS):
         opt.zero_grad()
         relay_probs = model(features)
-        loss, coverage, redundancy = propagation_loss(relay_probs, link, n, N_SOURCES_PER_STEP)
+        loss, coverage, redundancy = propagation_loss(relay_probs, link, n, redundancy_penalty)
         loss.backward()
         opt.step()
         if best_loss - loss.item() > MIN_DELTA:
@@ -52,13 +53,14 @@ def train(features, link, n):
         if epochs_without_improvement >= PATIENCE:
             print(f"stabilized ep={epoch}  best_loss={best_loss:.4f}")
             break
-    return model
+    return model, redundancy_penalty
 
 
-def evaluate(model, features, link, n):
+def evaluate(model, features, link, n, redundancy_penalty):
     with torch.no_grad():
         relay_probs = model(features)
-        loss, coverage, redundancy = propagation_loss(relay_probs, link, n)
+        loss, coverage, redundancy = propagation_loss(relay_probs, link, n, redundancy_penalty)
+        per_node_redundancy, per_node_coverage = node_redundancy(relay_probs, link, n)
     airtime = relay_probs.mean().item()
     print(f"\nfinal  coverage={coverage:.4f}  redundancy={redundancy:.4f}  airtime={airtime:.4f}  loss={loss:.4f}")
     relay_nodes = [i for i, p in enumerate(relay_probs.tolist()) if p >= RELAY_THRESHOLD]
@@ -66,8 +68,13 @@ def evaluate(model, features, link, n):
     print(f"\nrelay backbone (threshold={RELAY_THRESHOLD}):")
     print(f"  relay    ({len(relay_nodes):2d} nodes): {relay_nodes}")
     print(f"  suppress ({len(suppress_nodes):2d} nodes): {suppress_nodes}")
-    print("\nper-node relay probabilities:")
+    print("\nper-node analysis:")
+    print(f"  {'node':>4}  {'relay_prob':>10}  {'redundancy':>10}  {'coverage':>10}")
     for i, p in enumerate(relay_probs.tolist()):
-        marker = "  <-- relay" if p >= RELAY_THRESHOLD else ""
-        print(f"  node={i:2d}  relay_prob={p:.4f}{marker}")
+        marker = " <--" if p >= RELAY_THRESHOLD else ""
+        print(
+            f"  {i:>4}  {p:>10.4f}  "
+            f"{per_node_redundancy[i].item():>10.4f}  "
+            f"{per_node_coverage[i].item():>10.4f}{marker}"
+        )
     return relay_probs
