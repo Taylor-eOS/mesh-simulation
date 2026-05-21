@@ -1,4 +1,4 @@
-from utils import euclidean, normalize_signal, segment_intersection
+from utils import euclidean, segment_intersection
 
 PROPAGATION_ITERATIONS = 25
 COVERAGE_WEIGHT = 1.0
@@ -12,15 +12,11 @@ def nodes_connected(i, j, nodes, walls):
             return False
     return True
 
-def signal_strength(i, j, nodes):
+def link_quality(i, j, nodes):
     d = euclidean(nodes[i], nodes[j])
     if d >= MAX_RANGE:
         return None
-    return -130.0 + (1.0 - d / MAX_RANGE) * 100.0
-
-def reception_prob(sig):
-    norm = normalize_signal(sig)
-    return norm ** 2
+    return (1.0 - d / MAX_RANGE) ** 2
 
 def build_adjacency(nodes, walls):
     n = len(nodes)
@@ -32,11 +28,11 @@ def build_adjacency(nodes, walls):
                 continue
             if not nodes_connected(i, j, nodes, walls):
                 continue
-            sig = signal_strength(i, j, nodes)
-            if sig is None:
+            q = link_quality(i, j, nodes)
+            if q is None:
                 continue
-            adj[i].append((j, sig))
-            radj[j].append((i, sig))
+            adj[i].append((j, q))
+            radj[j].append((i, q))
     return adj, radj
 
 def simulate_propagation(source, relay_set, adj, radj, n):
@@ -49,10 +45,10 @@ def simulate_propagation(source, relay_set, adj, radj, n):
             if i == source:
                 continue
             p_not_rx = 1.0
-            for j, sig in radj[i]:
+            for j, q in radj[i]:
                 if j not in relay_set_with_source:
                     continue
-                p_not_rx *= (1.0 - reception_prob(sig) * p_reach[j])
+                p_not_rx *= (1.0 - q * p_reach[j])
             new_p[i] = 1.0 - p_not_rx
         delta = max(abs(new_p[i] - p_reach[i]) for i in range(n))
         p_reach = new_p
@@ -70,8 +66,8 @@ def propagation_quality(source, relay_set, adj, radj, n, p_reach=None):
         if i == source:
             continue
         expected_rx = sum(
-            reception_prob(sig) * p_reach[j]
-            for j, sig in radj[i]
+            q * p_reach[j]
+            for j, q in radj[i]
             if j in relay_set_with_source
         )
         total_redundancy += max(0.0, expected_rx - p_reach[i])
@@ -103,8 +99,8 @@ def compute_node_fingerprints(nodes, adj, radj):
             utility_sq_sum[node] += utility * utility
             coverage_sum[node] += p_full[node]
             expected_rx = sum(
-                reception_prob(sig) * p_full[j]
-                for j, sig in radj[node]
+                q * p_full[j]
+                for j, q in radj[node]
                 if j in relay_set | {source}
             )
             redundancy_sum[node] += max(0.0, expected_rx - p_full[node])
@@ -121,31 +117,31 @@ def compute_node_fingerprints(nodes, adj, radj):
             "mean_coverage": coverage_sum[node] / count,
             "mean_redundancy": redundancy_sum[node] / count,
             "degree": len(adj[node]),
-            "weighted_in_degree": sum(reception_prob(sig) for _j, sig in radj[node]),
+            "weighted_in_degree": sum(q for _j, q in radj[node]),
             "mean_out_signal": (
-                sum(sig for _j, sig in adj[node]) / len(adj[node])
-                if adj[node] else -130.0
+                sum(q for _j, q in adj[node]) / len(adj[node])
+                if adj[node] else 0.0
             ),
             "mean_in_signal": (
-                sum(sig for _j, sig in radj[node]) / len(radj[node])
-                if radj[node] else -130.0
+                sum(q for _j, q in radj[node]) / len(radj[node])
+                if radj[node] else 0.0
             ),
         }
     return fingerprints
 
 def extract_structural_features(node, adj, radj):
-    out_sigs = [sig for _j, sig in adj[node]]
-    in_sigs = [sig for _j, sig in radj[node]]
-    neighbor_degrees = [len(adj[j]) for j, _sig in adj[node]]
+    out_q = [q for _j, q in adj[node]]
+    in_q = [q for _j, q in radj[node]]
+    neighbor_degrees = [len(adj[j]) for j, _q in adj[node]]
     return {
-        "degree": len(out_sigs),
-        "mean_out_signal": sum(out_sigs) / len(out_sigs) if out_sigs else -130.0,
-        "mean_in_signal": sum(in_sigs) / len(in_sigs) if in_sigs else -130.0,
+        "degree": len(out_q),
+        "mean_out_signal": sum(out_q) / len(out_q) if out_q else 0.0,
+        "mean_in_signal": sum(in_q) / len(in_q) if in_q else 0.0,
         "neighbor_mean_degree": (
             sum(neighbor_degrees) / len(neighbor_degrees)
             if neighbor_degrees else 0.0
         ),
-        "weighted_in_degree": sum(reception_prob(sig) for sig in in_sigs),
+        "weighted_in_degree": sum(in_q),
     }
 
 def load_nodes(path):
@@ -171,4 +167,3 @@ def load_nodes(path):
                     (int(x2.strip()), int(y2.strip()))
                 ))
     return nodes, walls
-

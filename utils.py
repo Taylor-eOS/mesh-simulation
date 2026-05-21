@@ -1,9 +1,6 @@
 import math
 import pickle
 
-def normalize_signal(sig):
-    return (sig + 130.0) / 100.0
-
 def euclidean(a, b):
     return math.hypot(b[0] - a[0], b[1] - a[1])
 
