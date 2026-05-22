@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from propagation import propagation_loss, node_redundancy, auto_redundancy_penalty
+from propagation import propagation_loss, node_redundancy, auto_redundancy_penalty, transit_utility
 import settings
 
 class RelayPolicy(nn.Module):
@@ -51,12 +51,13 @@ def evaluate(model, features, link, n, redundancy_penalty):
         loss, coverage, redundancy = propagation_loss(relay_probs, link, n, redundancy_penalty)
         per_node_redundancy, per_node_coverage = node_redundancy(relay_probs, link, n)
         scores = relay_utility_scores(model, features)
+        transit_utilities = transit_utility(relay_probs, link, n)
     airtime = relay_probs.mean().item()
-    print(f"final  coverage={coverage:.4f}  redundancy={redundancy:.4f}  airtime={airtime:.4f}  loss={loss:.4f}")
-    print(f"  {'node':>4}  {'utility':>9}  {'redundancy':>10}  {'coverage':>10}")
+    print(f"final coverage={coverage:.4f}, redundancy={redundancy:.4f}, airtime={airtime:.4f}, loss={loss:.4f}")
+    print(f"  {'node':>4}  {'utility':>9}  {'transit':>9}  {'redundancy':>10}  {'coverage':>10}")
     for i, score in enumerate(scores.tolist()):
-        p = relay_probs[i].item()
+        transit = transit_utilities[i].item()
         red = per_node_redundancy[i].item()
         cov = per_node_coverage[i].item()
-        print(f"  {i:>4}  {score:>9.1f}  {red:>10.3f}  {cov:>10.3f}")
+        print(f"  {i:>4}  {score:>9.1f}  {transit:>9.3f}  {red:>10.3f}  {cov:>10.3f}")
     return scores

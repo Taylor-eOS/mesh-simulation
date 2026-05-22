@@ -48,3 +48,18 @@ def node_redundancy(relay_probs, link, n):
     redundancy_per_node = (expected_rx - p_reach).clamp(min=0.0).mean(dim=0)
     coverage_per_node = (p_reach * q_reach).mean(dim=0)
     return redundancy_per_node, coverage_per_node
+
+def transit_utility(relay_probs, link, n):
+    p_reach_base, _, q_reach_base = soft_propagate_all(relay_probs, link, n)
+    src_idx = torch.arange(n)
+    non_src_mask = torch.ones(n, n, dtype=torch.bool)
+    non_src_mask[src_idx, src_idx] = False
+    base_coverage = (p_reach_base * q_reach_base)[non_src_mask].mean()
+    utilities = torch.zeros(n)
+    for i in range(n):
+        modified_probs = relay_probs.clone()
+        modified_probs[i] = 0.0
+        p_reach, _, q_reach = soft_propagate_all(modified_probs, link, n)
+        node_coverage = (p_reach * q_reach)[non_src_mask].mean()
+        utilities[i] = base_coverage - node_coverage
+    return utilities
