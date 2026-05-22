@@ -1,5 +1,5 @@
 import torch
-from precompute_graph import PRECOMPUTED_PATH
+from settings import PRECOMPUTED_PATH
 
 def load_precomputed(path=PRECOMPUTED_PATH):
     data = torch.load(path)

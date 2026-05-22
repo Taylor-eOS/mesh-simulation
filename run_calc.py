@@ -1,6 +1,6 @@
 import tkinter as tk
 import math
-from utils import segment_intersection
+from utils import segment_intersection, euclidean
 
 WIDTH, HEIGHT = 700, 500
 NODE_RADIUS = 12
@@ -26,11 +26,6 @@ def nodes_connected(i, j, nodes, walls):
         if segment_intersection(nodes[i], nodes[j], w[0], w[1]):
             return False
     return True
-
-def node_distance(i, j, nodes):
-    x1, y1 = nodes[i]
-    x2, y2 = nodes[j]
-    return math.hypot(x2 - x1, y2 - y1)
 
 def compute_signal_strength(distance):
     if distance >= MAX_DISTANCE:
@@ -68,7 +63,7 @@ def dijkstra_paths(origin_idx, nodes, walls):
         visited[u] = True
         for v in range(n):
             if u != v and nodes_connected(u, v, nodes, walls):
-                d = node_distance(u, v, nodes)
+                d = euclidean(nodes[u], nodes[v])
                 signal = compute_signal_strength(d)
                 if signal > -130:
                     normalized_signal = (signal + 130) / 100
@@ -113,7 +108,7 @@ def draw(canvas, nodes, walls):
             x1, y1 = nodes[i]
             x2, y2 = nodes[j]
             if nodes_connected(i, j, nodes, walls):
-                dist = node_distance(i, j, nodes)
+                dist = euclidean(nodes[i], nodes[j])
                 signal = compute_signal_strength(dist)
                 if signal > -130:
                     t_val = (signal + 130) / 100

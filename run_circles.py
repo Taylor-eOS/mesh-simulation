@@ -1,6 +1,7 @@
 import tkinter as tk
 import math
 import random
+from utils import segment_intersection_t
 
 WIDTH, HEIGHT = 700, 500
 NODE_RADIUS = 8
@@ -8,21 +9,6 @@ NUM_NODES = 6
 PULSE_SPEED = 2.1
 FRAME_MS = 40
 RING_POINTS = 60
-
-def segment_intersection_t(p1, p2, p3, p4):
-    x1, y1 = p1
-    x2, y2 = p2
-    x3, y3 = p3
-    x4, y4 = p4
-    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    if denom == 0:
-        return None
-    t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
-    u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom
-    if 0 < t < 1 and 0 < u < 1:
-        return t
-    return None
-
 side = random.choice([True, False])
 if side:
     w1_min_x, w1_max_x = 200, 320
@@ -30,7 +16,6 @@ if side:
 else:
     w1_min_x, w1_max_x = 380, 500
     w2_min_x, w2_max_x = 200, 320
-
 wall_x2 = random.randint(w1_min_x, w1_max_x)
 wall_height = random.randint(220, 320)
 wall_x1 = wall_x2 + random.randint(-40, 40)

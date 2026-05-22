@@ -35,12 +35,9 @@ def train(features, link, n):
             epochs_without_improvement += 1
         if epoch % settings.LOG_INTERVAL == 0:
             airtime = relay_probs.mean().item()
-            print(
-                f"ep={epoch:4d}  loss={loss.item():.4f}  "
-                f"coverage={coverage:.4f}  redundancy={redundancy:.4f}  airtime={airtime:.4f}"
-            )
+            print(f"ep={epoch:4d}, loss={loss.item():.3f}, coverage={coverage:.3f}, redundancy={redundancy:.3f}, airtime={airtime:.3f}")
         if epochs_without_improvement >= settings.PATIENCE:
-            print(f"stabilized ep={epoch}  best_loss={best_loss:.4f}")
+            print(f"stabilized ep={epoch}, best_loss={best_loss:.4f}")
             break
     return model, redundancy_penalty
 
@@ -55,12 +52,11 @@ def evaluate(model, features, link, n, redundancy_penalty):
         per_node_redundancy, per_node_coverage = node_redundancy(relay_probs, link, n)
         scores = relay_utility_scores(model, features)
     airtime = relay_probs.mean().item()
-    print(f"\nfinal  coverage={coverage:.4f}  redundancy={redundancy:.4f}  airtime={airtime:.4f}  loss={loss:.4f}")
-    print("\nper-node analysis:")
+    print(f"final  coverage={coverage:.4f}  redundancy={redundancy:.4f}  airtime={airtime:.4f}  loss={loss:.4f}")
     print(f"  {'node':>4}  {'utility':>9}  {'redundancy':>10}  {'coverage':>10}")
     for i, score in enumerate(scores.tolist()):
         p = relay_probs[i].item()
         red = per_node_redundancy[i].item()
         cov = per_node_coverage[i].item()
-        print(f"  {i:>4}  {score:>9.4f}  {red:>10.4f}  {cov:>10.4f}")
+        print(f"  {i:>4}  {score:>9.1f}  {red:>10.3f}  {cov:>10.3f}")
     return scores

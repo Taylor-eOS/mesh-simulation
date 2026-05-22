@@ -8,3 +8,4 @@ MIN_DELTA = 1e-4
 MAX_RANGE = 500.0
 PROPAGATION_ITERATIONS = 25
 OUTPUT_FILE = "points.txt"
+PRECOMPUTED_PATH = "graph_precomputed.pt"

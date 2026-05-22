@@ -1,41 +1,11 @@
 import math
 import torch
-from settings import MAX_RANGE, OUTPUT_FILE
-
-PRECOMPUTED_PATH = "graph_precomputed.pt"
-
-def _euclidean(a, b):
-    return math.hypot(b[0] - a[0], b[1] - a[1])
-
-def _orient(p, q, r):
-    return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
-
-def _on_segment(p, q, r):
-    return (
-        min(p[0], r[0]) <= q[0] <= max(p[0], r[0])
-        and min(p[1], r[1]) <= q[1] <= max(p[1], r[1])
-    )
-
-def _segment_intersection(a, b, c, d):
-    o1 = _orient(a, b, c)
-    o2 = _orient(a, b, d)
-    o3 = _orient(c, d, a)
-    o4 = _orient(c, d, b)
-    if o1 * o2 < 0 and o3 * o4 < 0:
-        return True
-    if o1 == 0 and _on_segment(a, c, b):
-        return True
-    if o2 == 0 and _on_segment(a, d, b):
-        return True
-    if o3 == 0 and _on_segment(c, a, d):
-        return True
-    if o4 == 0 and _on_segment(c, b, d):
-        return True
-    return False
+from utils import euclidean, segment_intersection
+from settings import MAX_RANGE, OUTPUT_FILE, PRECOMPUTED_PATH
 
 def _nodes_connected(i, j, nodes, walls):
     for w in walls:
-        if _segment_intersection(nodes[i], nodes[j], w[0], w[1]):
+        if segment_intersection(nodes[i], nodes[j], w[0], w[1]):
             return False
     return True
 
@@ -69,7 +39,7 @@ def _load_graph(path):
                 continue
             if not _nodes_connected(i, j, nodes, walls):
                 continue
-            d = _euclidean(nodes[i], nodes[j])
+            d = euclidean(nodes[i], nodes[j])
             if d < MAX_RANGE:
                 link[i, j] = (1.0 - d / MAX_RANGE) ** 2
     return link, n
